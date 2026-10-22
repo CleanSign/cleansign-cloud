@@ -95,7 +95,7 @@ func (c *Client) Analyze(ctx context.Context, fileName string, pdf []byte, onPro
 
 	res, err := c.http.Do(req)
 	if err != nil {
-		return zero, transportError(ctx, err)
+		return zero, transportError(ctx, reqCtx, err)
 	}
 	defer func() { _ = res.Body.Close() }()
 
@@ -126,7 +126,7 @@ func (c *Client) Analyze(ctx context.Context, fileName string, pdf []byte, onPro
 		if line = bytes.TrimSpace(line); len(line) > 0 {
 			var ev event
 			if err := json.Unmarshal(line, &ev); err != nil {
-				return zero, badPayload(ctx, fmt.Errorf("ndjson 파싱 실패: %w", err))
+				return zero, badPayload(ctx, reqCtx, fmt.Errorf("ndjson 파싱 실패: %w", err))
 			}
 			switch ev.Type {
 			case "progress":
@@ -138,7 +138,7 @@ func (c *Client) Analyze(ctx context.Context, fileName string, pdf []byte, onPro
 			case "result":
 				a, err := decodeAnalysis(ev.Data)
 				if err != nil {
-					return zero, badPayload(ctx, err)
+					return zero, badPayload(ctx, reqCtx, err)
 				}
 				return a, nil
 			case "error":
@@ -154,12 +154,12 @@ func (c *Client) Analyze(ctx context.Context, fileName string, pdf []byte, onPro
 			if errors.Is(rerr, io.EOF) {
 				break
 			}
-			return zero, transportError(ctx, rerr)
+			return zero, transportError(ctx, reqCtx, rerr)
 		}
 	}
 	// Even if it looks like a normal end, a passed time limit means timeout is the cause.
 	if reqCtx.Err() != nil {
-		return zero, transportError(ctx, reqCtx.Err())
+		return zero, transportError(ctx, reqCtx, reqCtx.Err())
 	}
 	return zero, &svc.AnalysisError{Message: msgNoResult}
 }
@@ -189,23 +189,34 @@ var quoteEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\r", "", "\n", "")
 func escapeQuotes(s string) string { return quoteEscaper.Replace(s) }
 
 // transportError classifies transport/read errors into user messages.
-// If the caller canceled, it is a cancellation; if the time limit passed, a timeout; otherwise a connection failure.
-func transportError(parent context.Context, err error) error {
+// parent is the caller's context and req the one that carries the time limit of the whole request.
+//   - the caller cancelled: a cancellation
+//   - the time limit of the whole request passed, or a read stalled: a timeout (the analysis already used its time)
+//   - the connection could not be made, even if that attempt timed out: the AI server is unreachable (it may be restarting
+//     or the network to it is not ready yet), which is worth retrying
+//   - anything else: the connection broke
+func transportError(parent, req context.Context, err error) error {
 	if errors.Is(parent.Err(), context.Canceled) {
 		return &svc.AnalysisError{Message: msgCanceled, Err: parent.Err()}
+	}
+	if errors.Is(req.Err(), context.DeadlineExceeded) {
+		return &svc.AnalysisError{Message: msgTimeout, Err: err}
+	}
+	var oe *net.OpError
+	if errors.As(err, &oe) && oe.Op == "dial" {
+		return &svc.AnalysisError{Message: msgConnect, Err: err, Retryable: true}
 	}
 	var ne net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
 		return &svc.AnalysisError{Message: msgTimeout, Err: err}
 	}
-	// the AI server was unreachable or the connection broke (it may have restarted): trying again may work
 	return &svc.AnalysisError{Message: msgConnect, Err: err, Retryable: true}
 }
 
 // badPayload is for a response that arrived but cannot be understood. It looks like a connection failure to the user,
 // but asking again would return the same thing.
-func badPayload(parent context.Context, err error) error {
-	e := transportError(parent, err)
+func badPayload(parent, req context.Context, err error) error {
+	e := transportError(parent, req, err)
 	var ae *svc.AnalysisError
 	if errors.As(e, &ae) {
 		ae.Retryable = false

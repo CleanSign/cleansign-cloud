@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -320,4 +322,30 @@ func TestRetryable(t *testing.T) {
 			t.Error("a cancellation is not a failure: the worker decides by the cancel cause")
 		}
 	})
+}
+
+// A connection attempt that timed out means the AI server could not be reached at all (it is restarting, or the route to
+// it is not ready yet). That is not "the analysis took too long", and trying again may work.
+func TestDialTimeoutIsRetryableButAReadTimeoutIsNot(t *testing.T) {
+	dialTimesOut := &http.Client{Transport: &http.Transport{
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded} // "dial tcp 10.43.0.1:8000: i/o timeout"
+		},
+	}}
+	_, err := New("http://ai-service:8000", "", 5*time.Second, WithHTTPClient(dialTimesOut)).Analyze(context.Background(), "a.pdf", []byte("x"), nil)
+	ae := wantMsg(t, err, msgConnect)
+	if !ae.Retryable {
+		t.Error("a dial that timed out is a connection failure and must be retryable")
+	}
+
+	// the same i/o timeout while reading the response is a stalled analysis, not a connection failure
+	readTimesOut := &http.Client{Transport: &http.Transport{
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}
+		},
+	}}
+	_, err = New("http://ai-service:8000", "", 5*time.Second, WithHTTPClient(readTimesOut)).Analyze(context.Background(), "a.pdf", []byte("x"), nil)
+	if ae := wantMsg(t, err, msgTimeout); ae.Retryable {
+		t.Error("a read timeout is not retryable")
+	}
 }
