@@ -1,0 +1,35 @@
+# ci overlay: the local overlay, with a tiny stub in place of ai-service. Used only by the Deploy Test workflow.
+# The stub (deploy/e2e/ai-stub) answers like ai-service does for the worker, so the queue, retries and the worker crash
+# scenario are tested without building the real service (onnxruntime, OCR) on every pull request.
+# Needs deploy/k8s/overlays/local/secrets.env, so run `make -C deploy secrets` first.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../local
+
+images:
+  - name: cleansign/ai-service
+    newName: cleansign/ai-stub
+    newTag: ci
+
+# Slow the stub down (2 seconds per clause, about 12 seconds per analysis) so the crash scenario has time to kill the worker
+# in the middle of one. Set here from the start, instead of restarting ai-service during the test: a replaced pod can keep
+# answering for a few seconds while Kubernetes is still moving the traffic, which made the analysis finish at once.
+patches:
+  - target:
+      kind: Deployment
+      name: ai-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ai-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: ai-service
+                env:
+                  - name: MOCK_DELAY_S
+                    value: "2"

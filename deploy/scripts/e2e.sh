@@ -139,10 +139,25 @@ basic() {
 }
 
 crash() {
-  log "slowing ai-service down (MOCK_DELAY_S=2) so there is time to kill the worker mid-analysis"
-  trap 'k set env deploy/ai-service MOCK_DELAY_S- >/dev/null 2>&1 || true; k rollout status deploy/ai-service --timeout=120s >/dev/null 2>&1 || true' EXIT
-  k set env deploy/ai-service MOCK_DELAY_S=2 >/dev/null
-  k rollout status deploy/ai-service --timeout=120s >/dev/null || die "ai-service did not restart"
+  # The analysis has to last long enough to be interrupted. The ci overlay's stub is slow from the start (MOCK_DELAY_S).
+  # Otherwise slow ai-service down for the test and undo it afterwards.
+  local slow
+  slow="$(k get deploy ai-service -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MOCK_DELAY_S")].value}')"
+  if [ -n "$slow" ]; then
+    log "ai-service is already slow (MOCK_DELAY_S=$slow)"
+  else
+    log "slowing ai-service down (MOCK_DELAY_S=2) so there is time to kill the worker mid-analysis"
+    trap 'k set env deploy/ai-service MOCK_DELAY_S- >/dev/null 2>&1 || true; k rollout status deploy/ai-service --timeout=120s >/dev/null 2>&1 || true' EXIT
+    k set env deploy/ai-service MOCK_DELAY_S=2 >/dev/null
+    k rollout status deploy/ai-service --timeout=120s >/dev/null || die "ai-service did not restart"
+    # the replaced pod may still answer for a moment while Kubernetes moves the traffic: wait until it is really gone
+    local i
+    for i in $(seq 1 60); do
+      [ "$(k get pods -l app=ai-service --no-headers | wc -l | tr -d ' ')" = "1" ] && break
+      sleep 1
+    done
+    sleep 5
+  fi
 
   login
   local id
