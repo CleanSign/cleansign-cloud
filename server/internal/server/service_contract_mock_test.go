@@ -237,42 +237,6 @@ func (c *MockContractServiceRecentCall) DoAndReturn(f func(context.Context, stri
 	return c
 }
 
-// Shutdown mocks base method.
-func (m *MockContractService) Shutdown(ctx context.Context) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "Shutdown", ctx)
-}
-
-// Shutdown indicates an expected call of Shutdown.
-func (mr *MockContractServiceMockRecorder) Shutdown(ctx any) *MockContractServiceShutdownCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Shutdown", reflect.TypeOf((*MockContractService)(nil).Shutdown), ctx)
-	return &MockContractServiceShutdownCall{Call: call}
-}
-
-// MockContractServiceShutdownCall wrap *gomock.Call
-type MockContractServiceShutdownCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockContractServiceShutdownCall) Return() *MockContractServiceShutdownCall {
-	c.Call = c.Call.Return()
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockContractServiceShutdownCall) Do(f func(context.Context)) *MockContractServiceShutdownCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockContractServiceShutdownCall) DoAndReturn(f func(context.Context)) *MockContractServiceShutdownCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
 // Submit mocks base method.
 func (m *MockContractService) Submit(ctx context.Context, userID, fileName, contentType string, size int64, body io.Reader) (string, error) {
 	m.ctrl.T.Helper()
@@ -308,44 +272,6 @@ func (c *MockContractServiceSubmitCall) Do(f func(context.Context, string, strin
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockContractServiceSubmitCall) DoAndReturn(f func(context.Context, string, string, string, int64, io.Reader) (string, error)) *MockContractServiceSubmitCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
-// SweepStale mocks base method.
-func (m *MockContractService) SweepStale(ctx context.Context) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SweepStale", ctx)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SweepStale indicates an expected call of SweepStale.
-func (mr *MockContractServiceMockRecorder) SweepStale(ctx any) *MockContractServiceSweepStaleCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SweepStale", reflect.TypeOf((*MockContractService)(nil).SweepStale), ctx)
-	return &MockContractServiceSweepStaleCall{Call: call}
-}
-
-// MockContractServiceSweepStaleCall wrap *gomock.Call
-type MockContractServiceSweepStaleCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockContractServiceSweepStaleCall) Return(arg0 error) *MockContractServiceSweepStaleCall {
-	c.Call = c.Call.Return(arg0)
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockContractServiceSweepStaleCall) Do(f func(context.Context) error) *MockContractServiceSweepStaleCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockContractServiceSweepStaleCall) DoAndReturn(f func(context.Context) error) *MockContractServiceSweepStaleCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }
