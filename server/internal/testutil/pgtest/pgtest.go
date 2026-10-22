@@ -30,6 +30,14 @@ func New(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// AdminURL is the connection URL of the Postgres the tests create their temporary databases on.
+func AdminURL() string {
+	if u := os.Getenv("TEST_DATABASE_URL"); u != "" {
+		return u
+	}
+	return defaultAdminURL
+}
+
 // NewUnmigrated returns a pool for an empty temporary DB (no tables), and drops it when the test ends.
 func NewUnmigrated(t *testing.T) *pgxpool.Pool {
 	t.Helper()

@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/CleanSign/cleansign/server/internal/database"
 	"github.com/CleanSign/cleansign/server/internal/domain/auth"
@@ -316,5 +321,61 @@ func TestPageAndRecent(t *testing.T) {
 	}
 	if one, _ := repo.Recent(ctx, "u1", 1); len(one) != 1 {
 		t.Errorf("limit: %d", len(one))
+	}
+}
+
+func TestOpenWithRetryWaitsForADatabaseThatIsStillStarting(t *testing.T) {
+	pgtest.NewUnmigrated(t) // skips the test when there is no Postgres to run against
+
+	admin, err := pgx.Connect(ctx, pgtest.AdminURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+	name := "cleansign_retry_" + strings.ReplaceAll(t.Name(), "/", "_")[:20] + fmt.Sprint(time.Now().UnixNano()%100000)
+	name = strings.ToLower(name)
+	defer func() { _, _ = admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)") }()
+
+	u, _ := url.Parse(pgtest.AdminURL())
+	u.Path = "/" + name
+
+	// the database does not exist yet; it "starts" a little later
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		_, _ = admin.Exec(ctx, "CREATE DATABASE "+name)
+	}()
+	var retries int
+	pool, err := database.OpenWithRetry(ctx, u.String(), 30*time.Second, func(error) { retries++ })
+	if err != nil {
+		t.Fatalf("it should connect once the database is there: %v", err)
+	}
+	pool.Close()
+	if retries == 0 {
+		t.Error("it should have had to wait at least once")
+	}
+}
+
+func TestOpenWithRetryGivesUpAfterTheWaitAndRejectsABadURLAtOnce(t *testing.T) {
+	start := time.Now()
+	var retries int
+	// nothing listens on port 1: it is retried until the wait is over, then reported
+	_, err := database.OpenWithRetry(ctx, "postgres://postgres:x@127.0.0.1:1/none?sslmode=disable&connect_timeout=1", 3*time.Second, func(error) { retries++ })
+	if err == nil {
+		t.Fatal("an unreachable database must end in an error")
+	}
+	if elapsed := time.Since(start); elapsed < 2*time.Second || elapsed > 10*time.Second {
+		t.Errorf("it should wait about the given time, took %v", elapsed)
+	}
+	if retries == 0 {
+		t.Error("it should have retried at least once")
+	}
+
+	retries = 0
+	start = time.Now()
+	if _, err := database.OpenWithRetry(ctx, "not a url \x7f", time.Minute, func(error) { retries++ }); err == nil {
+		t.Fatal("a malformed URL must fail")
+	}
+	if retries != 0 || time.Since(start) > time.Second {
+		t.Errorf("a malformed URL is a settings mistake: no waiting (retries %d, took %v)", retries, time.Since(start))
 	}
 }

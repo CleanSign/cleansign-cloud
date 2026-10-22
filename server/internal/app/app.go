@@ -28,6 +28,8 @@ import (
 const (
 	housekeepingInterval = time.Minute
 	httpShutdownGrace    = 10 * time.Second
+	// How long a starting process keeps trying to reach the database before it gives up and exits.
+	databaseWait         = time.Minute
 	analysisShutdownWait = 30 * time.Second
 	// The overall limit for an analysis job is the AI server wait time plus slack for saving.
 	analysisSaveMargin = time.Minute
@@ -56,7 +58,7 @@ type App struct {
 
 // New connects to the DB, applies migrations, and assembles the server.
 func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error) {
-	pool, err := database.Open(ctx, cfg.DatabaseURL)
+	pool, err := database.OpenWithRetry(ctx, cfg.DatabaseURL, databaseWait, func(err error) { log.Warn("waiting for the database", "error", err) })
 	if err != nil {
 		return nil, err
 	}

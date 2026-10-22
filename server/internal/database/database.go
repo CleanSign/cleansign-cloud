@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,6 +33,40 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 	return pool, nil
+}
+
+// retryEvery is how long OpenWithRetry waits between two attempts.
+const retryEvery = 2 * time.Second
+
+// OpenWithRetry is Open for a database that may still be starting (on Kubernetes the API and the database come up at the
+// same time): if it cannot be reached it keeps trying for up to wait, calling onRetry with each failure. A URL that cannot
+// be parsed is a mistake in the settings and fails at once.
+func OpenWithRetry(ctx context.Context, url string, wait time.Duration, onRetry func(error)) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err == nil {
+			if err = pool.Ping(ctx); err == nil {
+				return pool, nil
+			}
+			pool.Close()
+		}
+		if ctx.Err() != nil || !time.Now().Add(retryEvery).Before(deadline) {
+			return nil, fmt.Errorf("ping database: %w", err)
+		}
+		if onRetry != nil {
+			onRetry(err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("ping database: %w", ctx.Err())
+		case <-time.After(retryEvery):
+		}
+	}
 }
 
 // Migrate applies all migrations that have not been applied yet.

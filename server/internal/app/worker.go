@@ -27,7 +27,7 @@ type WorkerApp struct {
 // NewWorkerApp connects to the database and assembles a worker process.
 // It does not apply migrations: the API server does that, and a worker that starts first just retries until the schema exists.
 func NewWorkerApp(ctx context.Context, cfg config.Config, log *slog.Logger) (*WorkerApp, error) {
-	pool, err := database.Open(ctx, cfg.DatabaseURL)
+	pool, err := database.OpenWithRetry(ctx, cfg.DatabaseURL, databaseWait, func(err error) { log.Warn("waiting for the database", "error", err) })
 	if err != nil {
 		return nil, err
 	}
