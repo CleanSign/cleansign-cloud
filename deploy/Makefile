@@ -4,6 +4,7 @@
 #   make up        Apply the local overlay to the cluster
 #   make status    Show pods, services, volumes
 #   make deploy S=server   Rebuild one service image (server|ai-service|web), load it into the VM, restart its pods (server also restarts the worker)
+#   make e2e [T=basic|crash|all]   Run the end-to-end check against the cluster (needs BASE_URL if it is not http://localhost)
 #   make forward   Open each service on its own local port (Ctrl+C stops all)
 #                    web http://localhost:3000   server http://localhost:4000
 #                    ai  http://localhost:8000   db     localhost:5433
@@ -23,7 +24,7 @@ export KUBECONFIG
 OVERLAY_DIR := k8s/overlays/$(OVERLAY)
 NS := cleansign
 
-.PHONY: secrets up deploy status forward down
+.PHONY: secrets up deploy e2e status forward down
 
 secrets:
 	@[ -f $(OVERLAY_DIR)/secrets.env ] || { \
@@ -45,6 +46,9 @@ deploy:
 	scripts/images.sh $(S)
 	for d in $(DEPLOYMENTS); do kubectl -n $(NS) rollout restart deploy/$$d; done
 	for d in $(DEPLOYMENTS); do kubectl -n $(NS) rollout status deploy/$$d --timeout=180s; done
+
+e2e:
+	scripts/e2e.sh $(or $(T),all)
 
 status:
 	kubectl -n $(NS) get pods,svc,pvc -o wide
