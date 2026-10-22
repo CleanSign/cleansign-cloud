@@ -1,0 +1,129 @@
+name: Deploy Test
+
+# On a pull request: build the images, deploy deploy/k8s into a throwaway k3d cluster and run deploy/scripts/e2e.sh against it.
+# It checks that the Kubernetes manifests and the new code work together (login, upload, analysis, a worker killed
+# mid-analysis). Nothing is published: the cluster only lives for the length of the job.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - server/**
+      - ai-service/**
+      - web/**
+      - deploy/**
+      - .github/workflows/deploy-test.yml
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  K3D_VERSION: v5.9.0
+  CLUSTER: ci
+  HOST_PORT: "8080"
+
+jobs:
+  deploy-test:
+    name: Deploy / k3d e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # skip draft pull requests; a manual run (workflow_dispatch) has no pull request
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+
+      # The three images are loaded into the local Docker daemon (load: true) under the names the local overlay expects.
+      - name: Build server
+        uses: docker/build-push-action@v7
+        with:
+          context: ./server
+          load: true
+          tags: cleansign/server:local
+          cache-from: |
+            type=gha,scope=server
+            type=gha,scope=deploy-test-server
+          cache-to: type=gha,scope=deploy-test-server,mode=max
+      - name: Build ai-service
+        uses: docker/build-push-action@v7
+        with:
+          context: ./ai-service
+          load: true
+          tags: cleansign/ai-service:local
+          cache-from: |
+            type=gha,scope=ai-service
+            type=gha,scope=deploy-test-ai-service
+          cache-to: type=gha,scope=deploy-test-ai-service,mode=max
+      - name: Build web
+        uses: docker/build-push-action@v7
+        with:
+          context: ./web
+          load: true
+          tags: cleansign/web:local
+          build-args: SERVER_URL=http://server:4000
+          cache-from: |
+            type=gha,scope=web
+            type=gha,scope=deploy-test-web
+          cache-to: type=gha,scope=deploy-test-web,mode=max
+
+      - name: Install k3d
+        run: |
+          base="https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}"
+          curl -fsSL -o k3d-linux-amd64 "$base/k3d-linux-amd64"
+          curl -fsSL -o checksums.txt "$base/checksums.txt"
+          grep '_dist/k3d-linux-amd64$' checksums.txt | sed 's#_dist/##' | sha256sum -c -
+          sudo install -m 0755 k3d-linux-amd64 /usr/local/bin/k3d
+          k3d version
+
+      # k3d's k3s ships Traefik and a local-path storage class, like the Lima cluster, so deploy/k8s applies unchanged.
+      - name: Create the cluster
+        run: |
+          k3d cluster create "$CLUSTER" --wait --timeout 180s -p "${HOST_PORT}:80@loadbalancer"
+          k3d image import cleansign/server:local cleansign/ai-service:local cleansign/web:local -c "$CLUSTER"
+          kubectl get nodes
+
+      - name: Deploy
+        run: |
+          make -C deploy up KUBECONFIG="$HOME/.kube/config"
+          kubectl -n cleansign rollout status statefulset/postgres --timeout=300s
+          for d in ai-service server worker web; do
+            kubectl -n cleansign rollout status "deploy/$d" --timeout=300s
+          done
+          kubectl -n cleansign get pods
+
+      - name: E2E (login, upload, analysis)
+        run: deploy/scripts/e2e.sh basic
+        env:
+          BASE_URL: http://localhost:${{ env.HOST_PORT }}
+
+      - name: E2E (worker killed mid-analysis)
+        run: deploy/scripts/e2e.sh crash
+        env:
+          BASE_URL: http://localhost:${{ env.HOST_PORT }}
+
+      - name: Collect diagnostics
+        if: failure()
+        run: |
+          mkdir -p diagnostics
+          kubectl get pods -A -o wide > diagnostics/pods.txt || true
+          kubectl -n cleansign describe pods > diagnostics/describe.txt || true
+          kubectl -n cleansign get events --sort-by=.lastTimestamp > diagnostics/events.txt || true
+          for app in server worker ai-service web postgres; do
+            kubectl -n cleansign logs -l "app=$app" --tail=500 --prefix --max-log-requests=5 > "diagnostics/$app.log" 2>&1 || true
+          done
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-test-diagnostics
+          path: diagnostics/
+          retention-days: 3
+
+      - name: Delete the cluster
+        if: always()
+        run: k3d cluster delete "$CLUSTER" || true
