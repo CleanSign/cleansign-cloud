@@ -231,11 +231,37 @@ func TestSendCode(t *testing.T) {
 	}
 }
 
+func TestSendCodeWindowLimit(t *testing.T) {
+	f := newFixture()
+	ctx := context.Background()
+	step := auth.ResendCooldown + time.Second
+	for i := 0; i < auth.MaxSendsPerWindow; i++ {
+		if _, err := f.svc.SendCode(ctx, "a@b.com"); err != nil {
+			t.Fatalf("send %d: %v", i+1, err)
+		}
+		f.clk.Advance(step)
+	}
+	var retry *auth.RetryAfterError
+	if _, err := f.svc.SendCode(ctx, "a@b.com"); !errors.As(err, &retry) {
+		t.Fatalf("6th send in the window must be refused: %v", err)
+	}
+	if want := auth.SendWindow - time.Duration(auth.MaxSendsPerWindow)*step; retry.After != want {
+		t.Errorf("wait until the window ends: got %v want %v", retry.After, want)
+	}
+	f.clk.Advance(retry.After)
+	if _, err := f.svc.SendCode(ctx, "a@b.com"); err != nil {
+		t.Errorf("a new window starts after an hour: %v", err)
+	}
+	if f.store.codes["a@b.com"].SendCount != 1 {
+		t.Errorf("counter restarts at 1: %+v", f.store.codes["a@b.com"])
+	}
+}
+
 func TestSendCodeMailFailureAllowsRetry(t *testing.T) {
 	f := newFixture()
 	f.mail.fail = errors.New("smtp down")
-	if _, err := f.svc.SendCode(context.Background(), "a@b.com"); err == nil {
-		t.Fatal("메일 실패는 오류여야 한다")
+	if _, err := f.svc.SendCode(context.Background(), "a@b.com"); !errors.Is(err, auth.ErrMailSend) {
+		t.Fatalf("mail failure must be ErrMailSend: %v", err)
 	}
 	f.mail.fail = nil
 	if _, err := f.svc.SendCode(context.Background(), "a@b.com"); err != nil {

@@ -57,20 +57,23 @@ func (s *service) SendCode(ctx context.Context, rawEmail string) (time.Duration,
 	if err != nil {
 		return 0, err
 	}
+	sendCount, windowStartedAt := existing.NextSend(now)
 	if err := s.codes.Upsert(ctx, auth.EmailCode{
-		Email:     email,
-		CodeHash:  auth.HashCode(s.codeSecret, email, code),
-		SentAt:    now,
-		ExpiresAt: now.Add(auth.CodeTTL),
+		Email:           email,
+		CodeHash:        auth.HashCode(s.codeSecret, email, code),
+		SentAt:          now,
+		ExpiresAt:       now.Add(auth.CodeTTL),
+		SendCount:       sendCount,
+		WindowStartedAt: windowStartedAt,
 	}); err != nil {
 		return 0, err
 	}
 	if err := s.mailer.SendCode(ctx, email, code, auth.CodeTTL); err != nil {
-		// if sending failed, clear it so the user can request again right away without waiting
+		// nothing was sent: drop the row so the user can retry right away, and don't count it against the window
 		if delErr := s.codes.Delete(ctx, email); delErr != nil {
 			s.log.Warn("failed to delete unsent code", "error", delErr)
 		}
-		return 0, fmt.Errorf("send code mail: %w", err)
+		return 0, fmt.Errorf("%w: %w", auth.ErrMailSend, err)
 	}
 	return auth.ResendCooldown, nil
 }
