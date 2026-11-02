@@ -40,3 +40,42 @@ export const SEVERITY_CHIP: Record<string, { label: string; tone: "danger" | "wa
   medium: { label: "손실 보통", tone: "warn" },
   low: { label: "손실 작음", tone: "neutral" },
 };
+
+/**
+ * Overall contract grade chip. Worded as "risk level" so it is not confused with the per-clause
+ * loss-size chip (SEVERITY_CHIP), and drawn as an outline chip instead of a filled one.
+ * As with SEVERITY_CHIP, the low end is never colored green (safe).
+ */
+export const GRADE_CHIP: Record<string, { label: string; tone: "danger" | "warn" | "neutral" }> = {
+  high: { label: "위험도 높음", tone: "danger" },
+  medium: { label: "위험도 보통", tone: "warn" },
+  low: { label: "위험도 낮음", tone: "neutral" },
+};
+
+/** Clamp a risk score into 0-100 for display. Returns null for a missing or non-finite value. 0 is a valid score. */
+export function clampScore(score: number | null): number | null {
+  if (score === null || !Number.isFinite(score)) return null;
+  return Math.min(100, Math.max(0, Math.round(score)));
+}
+
+/**
+ * Number of labeled dispute cases per clause type behind the loss estimate.
+ * Source: data/labeling/severity_dataset_adrhome.csv + severity_dataset_hldcc.csv (rows per clause_type_mapping).
+ * Update together with the labeling data.
+ */
+export const SAMPLE_COUNT: Record<string, number> = {
+  선순위근저당: 0,
+  보증금반환제한: 0,
+  원상복구과도부담: 18,
+  묵시적갱신배제: 19,
+  기타불이익: 0,
+};
+
+/**
+ * PLACEHOLDER threshold: fewer samples than this marks a clause as "for reference only".
+ * Taken from the per-type minimum in data/labeling/README.md (rule 4). Do not change it without the data team.
+ */
+export const MIN_SAMPLES = 15;
+
+/** True when the clause type has too few samples. An unknown or unclassified type counts as having none. */
+export const isLowSample = (clauseType: string | null) => (clauseType ? (SAMPLE_COUNT[clauseType] ?? 0) : 0) < MIN_SAMPLES;
