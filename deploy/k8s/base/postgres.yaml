@@ -1,0 +1,92 @@
+# postgres: DB는 데이터를 디스크에 남겨야 하므로 Deployment가 아니라 StatefulSet으로 둔다.
+# (파드가 교체돼도 같은 이름·같은 디스크(PVC)를 다시 붙잡는다)
+#
+# 학습용으로 클러스터 안에 두는 구성이다. 운영에서는 매니지드 Postgres를 권장한다.
+# 이 파일을 바꾸지 않고 server의 DATABASE_URL만 바꾸면 외부 DB로 옮길 수 있다.
+
+# Service: 파드는 교체될 때마다 IP가 바뀌므로, 고정된 이름(postgres)으로 부를 수 있게 해 준다.
+# 클러스터 안의 다른 파드는 `postgres:5432` 로 접속한다.
+# clusterIP: None 은 StatefulSet 이 쓰는 "headless" 서비스 형태다.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  serviceName: postgres
+  replicas: 1 # DB는 1개. 복제(replica) 구성은 이번 범위 밖
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: cleansign
+            - name: POSTGRES_USER
+              value: postgres
+            # 비밀번호는 코드에 적지 않고 Secret 에서 가져온다 (overlay 의 secretGenerator 가 만든다)
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cleansign-secrets
+                  key: POSTGRES_PASSWORD
+            # 마운트한 볼륨 루트에는 lost+found 가 있어서 initdb 가 실패할 수 있다. 하위 폴더를 쓴다.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          # readiness: 접속이 되기 전에는 Service 가 이 파드로 트래픽을 보내지 않는다.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "cleansign"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          # liveness: 응답이 계속 없으면 쿠버네티스가 컨테이너를 재시작한다.
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "cleansign"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          # requests: 스케줄러가 "최소 이만큼은 보장"하는 양. limits: 넘으면 안 되는 상한(메모리 초과 시 종료).
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+  # PVC 템플릿: 파드마다 디스크를 하나씩 요청한다. k3s 기본 StorageClass(local-path)가 VM 디스크에 만들어 준다.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

@@ -1,0 +1,15 @@
+# Kustomize: 여러 YAML 을 묶고, overlay 에서 환경별로 덮어쓸 수 있게 해 주는 도구 (kubectl 에 내장).
+# 이 base 는 "어느 환경에서나 같은 부분"만 담는다. 환경별 차이(이미지 출처, 호스트명, 보안 설정)는 overlays/ 에 둔다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cleansign
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - ai-service.yaml
+  - server.yaml
+  - worker.yaml
+  - web.yaml
+  - ingress.yaml

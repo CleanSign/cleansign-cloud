@@ -1,0 +1,28 @@
+# local overlay: 이 맥의 Lima VM(k3s)에서 돌리는 환경.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# secretGenerator: secrets.env 파일의 KEY=VALUE 로 Secret 을 만든다.
+# 이미지 태그는 여기서만 정한다. 로컬 이미지는 scripts/images.sh 가 VM 에 직접 넣는다.
+# (레지스트리를 쓰게 되면 name 을 ghcr.io/... 로 바꾸고 newTag 를 커밋 SHA 로 바꾼다)
+images:
+  - name: cleansign/server
+    newTag: local
+  - name: cleansign/ai-service
+    newTag: local
+  - name: cleansign/web
+    newTag: local
+
+# base 의 namespace 설정은 base 리소스에만 적용된다. overlay 가 만드는 Secret 도 같은 곳에 놓이도록 여기서 다시 지정한다.
+# (빠뜨리면 Secret 이 default 네임스페이스에 생겨서 파드가 "secret not found" 로 멈춘다)
+namespace: cleansign
+
+# secrets.env 는 Git 에 올라가지 않는다 (`make secrets` 가 secrets.env.example 로 만든다).
+# 이름 뒤에 내용 해시가 붙어서, 값이 바뀌면 이 Secret 을 쓰는 파드가 자동으로 새로 뜬다.
+secretGenerator:
+  - name: cleansign-secrets
+    envs:
+      - secrets.env

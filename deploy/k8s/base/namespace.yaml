@@ -1,0 +1,6 @@
+# Namespace: 클러스터 안에서 CleanSign 리소스를 한데 묶는 "폴더".
+# 이름이 겹치는 다른 앱과 섞이지 않고, 지울 때 `kubectl delete ns cleansign` 한 줄로 전부 정리된다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cleansign

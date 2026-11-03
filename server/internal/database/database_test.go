@@ -4,8 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/CleanSign/cleansign/server/internal/database"
 	"github.com/CleanSign/cleansign/server/internal/domain/auth"
@@ -16,6 +22,37 @@ import (
 )
 
 var ctx = context.Background()
+
+// Several processes (API replicas, workers) may start at the same moment on an empty database.
+func TestMigrateIsSafeWhenRunConcurrently(t *testing.T) {
+	pool := pgtest.NewUnmigrated(t)
+
+	const starters = 8
+	errs := make(chan error, starters)
+	var wg sync.WaitGroup
+	for i := 0; i < starters; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- database.Migrate(ctx, pool)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("every concurrent Migrate must succeed: %v", err)
+		}
+	}
+
+	var applied, versions int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_name IN ('users', 'contract', 'contract_file')`).Scan(&applied); err != nil || applied != 3 {
+		t.Errorf("the schema is complete: %d tables %v", applied, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id > 0`).Scan(&versions); err != nil || versions != 3 {
+		t.Errorf("each migration is recorded exactly once: %d %v", versions, err)
+	}
+}
 
 func TestMigrateIsIdempotent(t *testing.T) {
 	pool := pgtest.New(t)
@@ -230,12 +267,11 @@ func TestCompleteIsAtomic(t *testing.T) {
 	}
 }
 
-func TestFailAndStale(t *testing.T) {
+func TestFail(t *testing.T) {
 	pool := pgtest.New(t)
 	newUser(t, database.NewUserRepo(pool), "u1", "a@b.com")
 	repo := database.NewContractRepo(pool)
 	repo.Create(ctx, pending("k1", "u1"))
-	repo.Create(ctx, pending("k2", "u1"))
 
 	if err := repo.Fail(ctx, "k1", "실패했어요"); err != nil {
 		t.Fatal(err)
@@ -243,21 +279,6 @@ func TestFailAndStale(t *testing.T) {
 	got, _ := repo.Get(ctx, "u1", "k1")
 	if got.Status != contract.StatusFailed || got.ErrorMessage == nil || *got.ErrorMessage != "실패했어요" || got.Progress != nil {
 		t.Errorf("failed 상태: %+v", got)
-	}
-
-	// a contract just created is newer than the cutoff, so it is not changed
-	repo.FailIfStale(ctx, "k2", time.Now().Add(-time.Hour), "stale")
-	if got, _ := repo.Get(ctx, "u1", "k2"); got.Status != contract.StatusPending {
-		t.Errorf("새 계약서는 stale이 아니다: %v", got.Status)
-	}
-	repo.FailIfStale(ctx, "k2", time.Now().Add(time.Hour), "stale")
-	if got, _ := repo.Get(ctx, "u1", "k2"); got.Status != contract.StatusFailed || *got.ErrorMessage != "stale" {
-		t.Errorf("기준 시각보다 오래됐으면 failed: %+v", got)
-	}
-
-	repo.Create(ctx, pending("k3", "u1"))
-	if n, err := repo.FailAllStale(ctx, time.Now().Add(time.Hour), "sweep"); err != nil || n != 1 {
-		t.Errorf("FailAllStale은 pending만 바꾼다: %d %v", n, err)
 	}
 }
 
@@ -300,5 +321,61 @@ func TestPageAndRecent(t *testing.T) {
 	}
 	if one, _ := repo.Recent(ctx, "u1", 1); len(one) != 1 {
 		t.Errorf("limit: %d", len(one))
+	}
+}
+
+func TestOpenWithRetryWaitsForADatabaseThatIsStillStarting(t *testing.T) {
+	pgtest.NewUnmigrated(t) // skips the test when there is no Postgres to run against
+
+	admin, err := pgx.Connect(ctx, pgtest.AdminURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+	name := "cleansign_retry_" + strings.ReplaceAll(t.Name(), "/", "_")[:20] + fmt.Sprint(time.Now().UnixNano()%100000)
+	name = strings.ToLower(name)
+	defer func() { _, _ = admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)") }()
+
+	u, _ := url.Parse(pgtest.AdminURL())
+	u.Path = "/" + name
+
+	// the database does not exist yet; it "starts" a little later
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		_, _ = admin.Exec(ctx, "CREATE DATABASE "+name)
+	}()
+	var retries int
+	pool, err := database.OpenWithRetry(ctx, u.String(), 30*time.Second, func(error) { retries++ })
+	if err != nil {
+		t.Fatalf("it should connect once the database is there: %v", err)
+	}
+	pool.Close()
+	if retries == 0 {
+		t.Error("it should have had to wait at least once")
+	}
+}
+
+func TestOpenWithRetryGivesUpAfterTheWaitAndRejectsABadURLAtOnce(t *testing.T) {
+	start := time.Now()
+	var retries int
+	// nothing listens on port 1: it is retried until the wait is over, then reported
+	_, err := database.OpenWithRetry(ctx, "postgres://postgres:x@127.0.0.1:1/none?sslmode=disable&connect_timeout=1", 3*time.Second, func(error) { retries++ })
+	if err == nil {
+		t.Fatal("an unreachable database must end in an error")
+	}
+	if elapsed := time.Since(start); elapsed < 2*time.Second || elapsed > 10*time.Second {
+		t.Errorf("it should wait about the given time, took %v", elapsed)
+	}
+	if retries == 0 {
+		t.Error("it should have retried at least once")
+	}
+
+	retries = 0
+	start = time.Now()
+	if _, err := database.OpenWithRetry(ctx, "not a url \x7f", time.Minute, func(error) { retries++ }); err == nil {
+		t.Fatal("a malformed URL must fail")
+	}
+	if retries != 0 || time.Since(start) > time.Second {
+		t.Errorf("a malformed URL is a settings mistake: no waiting (retries %d, took %v)", retries, time.Since(start))
 	}
 }

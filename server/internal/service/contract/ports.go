@@ -25,10 +25,28 @@ type Repository interface {
 	// If the user deleted the contract during analysis, it saves nothing and returns false.
 	Complete(ctx context.Context, id string, r contract.Result, clauses []contract.Clause) (bool, error)
 	Fail(ctx context.Context, id, message string) error
-	// FailIfStale marks only pending contracts created before createdBefore as failed.
-	FailIfStale(ctx context.Context, id string, createdBefore time.Time, message string) error
-	// FailAllStale marks all stale pending contracts as failed and returns the number changed.
-	FailAllStale(ctx context.Context, createdBefore time.Time, message string) (int64, error)
+}
+
+// Queue is the analysis job queue. The contract table is the queue: see migration 00003.
+// A job is claimed with a lease that the owner keeps extending; if the owner dies the lease expires and the job is retried.
+type Queue interface {
+	// Enqueue saves a new pending contract together with its PDF in one transaction.
+	Enqueue(ctx context.Context, c contract.Contract, pdf []byte) error
+	// Claim takes the oldest runnable job for worker. ok is false if nothing is runnable.
+	Claim(ctx context.Context, worker string, now time.Time, lease time.Duration) (job contract.Job, ok bool, err error)
+	// Heartbeat extends the lease. ok is false if worker no longer owns the job.
+	Heartbeat(ctx context.Context, id, worker string, until time.Time) (ok bool, err error)
+	// Requeue gives a job back to run again at notBefore. refundAttempt takes back the attempt counted at claim time.
+	Requeue(ctx context.Context, id, worker string, notBefore time.Time, refundAttempt bool) (ok bool, err error)
+	// ReapExpired requeues jobs whose worker disappeared, fails jobs that are out of attempts or waited too long,
+	// and removes PDFs of finished contracts.
+	ReapExpired(ctx context.Context, now time.Time) (contract.ReapResult, error)
+}
+
+// FileStore returns the uploaded PDF of a queued contract (errs.ErrNotFound if it is gone).
+// Where the files live is hidden behind this port: today Postgres, possibly an object storage later.
+type FileStore interface {
+	Get(ctx context.Context, contractID string) ([]byte, error)
 }
 
 // AnalysisError carries the reason an analysis failed together with a message to show the user.
@@ -36,6 +54,9 @@ type Repository interface {
 type AnalysisError struct {
 	Message string
 	Err     error
+	// Retryable is true when trying again may succeed: the AI server was unreachable or failed on its side.
+	// It is false when the same input would fail again (unreadable PDF, timeout, bad request).
+	Retryable bool
 }
 
 func (e *AnalysisError) Error() string { return e.Message }

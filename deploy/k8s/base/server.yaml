@@ -1,0 +1,96 @@
+# server: Go API. 클러스터 안에서 http://server:4000 으로 부른다 (web 이 /api/v1 을 여기로 넘긴다).
+apiVersion: v1
+kind: Service
+metadata:
+  name: server
+  labels:
+    app: server
+spec:
+  selector:
+    app: server
+  ports:
+    - name: http
+      port: 4000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  labels:
+    app: server
+spec:
+  # server 는 상태가 없는 API 다. 분석은 별도 worker Deployment(worker.yaml)가 DB 의 큐에서 가져가서 돌린다.
+  # 그래서 파드를 여러 개 두거나 교체해도 진행 중인 분석에 영향이 없다.
+  # RollingUpdate: 새 파드가 Ready 가 된 뒤 옛 파드를 내려서 교체 중 중단을 없앤다
+  # (replicas 1 의 Recreate 로 측정했을 때 교체마다 약 3.5초 요청이 실패했다).
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: server
+  template:
+    metadata:
+      labels:
+        app: server
+    spec:
+      # SIGTERM 을 받으면 진행 중인 HTTP 요청을 최대 10초 기다리고 종료한다(internal/app/app.go).
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: server
+          image: cleansign/server # 태그는 overlay 의 images: 에서 정한다
+          ports:
+            - name: http
+              containerPort: 4000
+          env:
+            - name: PORT
+              value: "4000"
+            # 분석은 worker 가 맡는다. 이 프로세스 안에서 worker 를 돌리지 않는다(기본값은 true).
+            - name: WORKER_EMBEDDED
+              value: "false"
+            # 아래 DATABASE_URL 의 $(POSTGRES_PASSWORD) 는 이 목록에서 먼저 정의된 환경변수로 치환된다.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cleansign-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgres://postgres:$(POSTGRES_PASSWORD)@postgres:5432/cleansign?sslmode=disable
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cleansign-secrets
+                  key: JWT_SECRET
+            - name: AI_SERVICE_URL
+              value: http://ai-service:8000
+            - name: AI_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cleansign-secrets
+                  key: INTERNAL_TOKEN
+            # SMTP_HOST 가 비어 있으면 메일을 보내지 않고 인증코드가 로그에 찍힌다 (kubectl logs deploy/server).
+            # 실제 발송이 필요하면 overlay 에서 SMTP_* 를 채운다.
+          # /healthz 는 DB 연결까지 확인한다. DB 가 준비되기 전에는 Ready 가 되지 않는다.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

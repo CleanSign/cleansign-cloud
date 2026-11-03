@@ -1,0 +1,68 @@
+# web: Next.js(standalone). 브라우저에서 오는 요청을 받고, /api/v1/* 는 server 로 넘긴다(rewrites).
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  labels:
+    app: web
+spec:
+  selector:
+    app: web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    app: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: cleansign/web # 태그는 overlay 의 images: 에서 정한다
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # Next.js standalone 은 HOSTNAME 주소에 바인딩한다. 쿠버네티스는 이 값을 파드 이름으로 채워서
+            # 파드 IP 에만 바인딩되고 localhost 접속(port-forward 등)이 안 된다. 모든 주소에서 받도록 고정한다.
+            - name: HOSTNAME
+              value: 0.0.0.0
+            # rewrites 는 "빌드 시점"에 고정된다(이미지를 만들 때 SERVER_URL 빌드 인자로 넣는다).
+            # 이 값은 서버 컴포넌트/미들웨어가 런타임에 server 를 호출할 때 쓰며, 빌드 인자와 같아야 한다.
+            - name: SERVER_URL
+              value: http://server:4000
+            # http 로 접속하는 로컬 환경에서는 false. 운영(https)에서는 overlay 로 true 로 바꾼다.
+            - name: COOKIE_SECURE
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi

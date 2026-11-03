@@ -1,0 +1,98 @@
+name: Container Images
+
+# Builds the server, ai-service and web images.
+#   pull_request: build only (amd64, nothing is pushed) to check the Dockerfiles
+#   push to main: build amd64 + arm64 and push to GHCR, tagged with the short commit SHA
+# All three images get the same tag for one commit, so a deployment only has to name one SHA.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - server/**
+      - ai-service/**
+      - web/**
+      - .github/workflows/images.yml
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - server/**
+      - ai-service/**
+      - web/**
+      - .github/workflows/images.yml
+  workflow_dispatch:
+
+concurrency:
+  group: images-${{ github.ref }}
+  # don't cancel a push to main half way: that could leave only some of the three images pushed
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Image / ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [server, ai-service, web]
+    env:
+      PUSH: ${{ github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # GHCR image names must be lowercase, but the repository name (CleanSign/...) is not.
+      - name: Image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}/${{ matrix.service }}" >> "$GITHUB_ENV"
+
+      # QEMU is only needed to build the arm64 image on an x86 runner.
+      - uses: docker/setup-qemu-action@v4
+        if: env.PUSH == 'true'
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        if: env.PUSH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=short,prefix=
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ./${{ matrix.service }}
+          platforms: ${{ env.PUSH == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # web: rewrites (/api/v1/* -> server) are fixed at build time. The in-cluster Service name is the same in every environment.
+          build-args: ${{ matrix.service == 'web' && 'SERVER_URL=http://server:4000' || '' }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Summary
+        if: env.PUSH == 'true'
+        run: |
+          {
+            echo "### ${{ matrix.service }}"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo "digest: ${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

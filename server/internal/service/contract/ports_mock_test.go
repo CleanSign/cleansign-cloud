@@ -235,83 +235,6 @@ func (c *MockRepositoryFailCall) DoAndReturn(f func(context.Context, string, str
 	return c
 }
 
-// FailAllStale mocks base method.
-func (m *MockRepository) FailAllStale(ctx context.Context, createdBefore time.Time, message string) (int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FailAllStale", ctx, createdBefore, message)
-	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// FailAllStale indicates an expected call of FailAllStale.
-func (mr *MockRepositoryMockRecorder) FailAllStale(ctx, createdBefore, message any) *MockRepositoryFailAllStaleCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FailAllStale", reflect.TypeOf((*MockRepository)(nil).FailAllStale), ctx, createdBefore, message)
-	return &MockRepositoryFailAllStaleCall{Call: call}
-}
-
-// MockRepositoryFailAllStaleCall wrap *gomock.Call
-type MockRepositoryFailAllStaleCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockRepositoryFailAllStaleCall) Return(arg0 int64, arg1 error) *MockRepositoryFailAllStaleCall {
-	c.Call = c.Call.Return(arg0, arg1)
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockRepositoryFailAllStaleCall) Do(f func(context.Context, time.Time, string) (int64, error)) *MockRepositoryFailAllStaleCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockRepositoryFailAllStaleCall) DoAndReturn(f func(context.Context, time.Time, string) (int64, error)) *MockRepositoryFailAllStaleCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
-// FailIfStale mocks base method.
-func (m *MockRepository) FailIfStale(ctx context.Context, id string, createdBefore time.Time, message string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FailIfStale", ctx, id, createdBefore, message)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// FailIfStale indicates an expected call of FailIfStale.
-func (mr *MockRepositoryMockRecorder) FailIfStale(ctx, id, createdBefore, message any) *MockRepositoryFailIfStaleCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FailIfStale", reflect.TypeOf((*MockRepository)(nil).FailIfStale), ctx, id, createdBefore, message)
-	return &MockRepositoryFailIfStaleCall{Call: call}
-}
-
-// MockRepositoryFailIfStaleCall wrap *gomock.Call
-type MockRepositoryFailIfStaleCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockRepositoryFailIfStaleCall) Return(arg0 error) *MockRepositoryFailIfStaleCall {
-	c.Call = c.Call.Return(arg0)
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockRepositoryFailIfStaleCall) Do(f func(context.Context, string, time.Time, string) error) *MockRepositoryFailIfStaleCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockRepositoryFailIfStaleCall) DoAndReturn(f func(context.Context, string, time.Time, string) error) *MockRepositoryFailIfStaleCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
 // Get mocks base method.
 func (m *MockRepository) Get(ctx context.Context, userID, id string) (contract.Contract, error) {
 	m.ctrl.T.Helper()
@@ -463,6 +386,288 @@ func (c *MockRepositoryUpdateProgressCall) Do(f func(context.Context, string, co
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockRepositoryUpdateProgressCall) DoAndReturn(f func(context.Context, string, contract.Progress) error) *MockRepositoryUpdateProgressCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// MockQueue is a mock of Queue interface.
+type MockQueue struct {
+	ctrl     *gomock.Controller
+	recorder *MockQueueMockRecorder
+	isgomock struct{}
+}
+
+// MockQueueMockRecorder is the mock recorder for MockQueue.
+type MockQueueMockRecorder struct {
+	mock *MockQueue
+}
+
+// NewMockQueue creates a new mock instance.
+func NewMockQueue(ctrl *gomock.Controller) *MockQueue {
+	mock := &MockQueue{ctrl: ctrl}
+	mock.recorder = &MockQueueMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockQueue) EXPECT() *MockQueueMockRecorder {
+	return m.recorder
+}
+
+// Claim mocks base method.
+func (m *MockQueue) Claim(ctx context.Context, worker string, now time.Time, lease time.Duration) (contract.Job, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Claim", ctx, worker, now, lease)
+	ret0, _ := ret[0].(contract.Job)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// Claim indicates an expected call of Claim.
+func (mr *MockQueueMockRecorder) Claim(ctx, worker, now, lease any) *MockQueueClaimCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Claim", reflect.TypeOf((*MockQueue)(nil).Claim), ctx, worker, now, lease)
+	return &MockQueueClaimCall{Call: call}
+}
+
+// MockQueueClaimCall wrap *gomock.Call
+type MockQueueClaimCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockQueueClaimCall) Return(job contract.Job, ok bool, err error) *MockQueueClaimCall {
+	c.Call = c.Call.Return(job, ok, err)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockQueueClaimCall) Do(f func(context.Context, string, time.Time, time.Duration) (contract.Job, bool, error)) *MockQueueClaimCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockQueueClaimCall) DoAndReturn(f func(context.Context, string, time.Time, time.Duration) (contract.Job, bool, error)) *MockQueueClaimCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// Enqueue mocks base method.
+func (m *MockQueue) Enqueue(ctx context.Context, c contract.Contract, pdf []byte) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Enqueue", ctx, c, pdf)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Enqueue indicates an expected call of Enqueue.
+func (mr *MockQueueMockRecorder) Enqueue(ctx, c, pdf any) *MockQueueEnqueueCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Enqueue", reflect.TypeOf((*MockQueue)(nil).Enqueue), ctx, c, pdf)
+	return &MockQueueEnqueueCall{Call: call}
+}
+
+// MockQueueEnqueueCall wrap *gomock.Call
+type MockQueueEnqueueCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c_2 *MockQueueEnqueueCall) Return(arg0 error) *MockQueueEnqueueCall {
+	c_2.Call = c_2.Call.Return(arg0)
+	return c_2
+}
+
+// Do rewrite *gomock.Call.Do
+func (c_2 *MockQueueEnqueueCall) Do(f func(context.Context, contract.Contract, []byte) error) *MockQueueEnqueueCall {
+	c_2.Call = c_2.Call.Do(f)
+	return c_2
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c_2 *MockQueueEnqueueCall) DoAndReturn(f func(context.Context, contract.Contract, []byte) error) *MockQueueEnqueueCall {
+	c_2.Call = c_2.Call.DoAndReturn(f)
+	return c_2
+}
+
+// Heartbeat mocks base method.
+func (m *MockQueue) Heartbeat(ctx context.Context, id, worker string, until time.Time) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Heartbeat", ctx, id, worker, until)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Heartbeat indicates an expected call of Heartbeat.
+func (mr *MockQueueMockRecorder) Heartbeat(ctx, id, worker, until any) *MockQueueHeartbeatCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Heartbeat", reflect.TypeOf((*MockQueue)(nil).Heartbeat), ctx, id, worker, until)
+	return &MockQueueHeartbeatCall{Call: call}
+}
+
+// MockQueueHeartbeatCall wrap *gomock.Call
+type MockQueueHeartbeatCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockQueueHeartbeatCall) Return(ok bool, err error) *MockQueueHeartbeatCall {
+	c.Call = c.Call.Return(ok, err)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockQueueHeartbeatCall) Do(f func(context.Context, string, string, time.Time) (bool, error)) *MockQueueHeartbeatCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockQueueHeartbeatCall) DoAndReturn(f func(context.Context, string, string, time.Time) (bool, error)) *MockQueueHeartbeatCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// ReapExpired mocks base method.
+func (m *MockQueue) ReapExpired(ctx context.Context, now time.Time) (contract.ReapResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReapExpired", ctx, now)
+	ret0, _ := ret[0].(contract.ReapResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ReapExpired indicates an expected call of ReapExpired.
+func (mr *MockQueueMockRecorder) ReapExpired(ctx, now any) *MockQueueReapExpiredCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReapExpired", reflect.TypeOf((*MockQueue)(nil).ReapExpired), ctx, now)
+	return &MockQueueReapExpiredCall{Call: call}
+}
+
+// MockQueueReapExpiredCall wrap *gomock.Call
+type MockQueueReapExpiredCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockQueueReapExpiredCall) Return(arg0 contract.ReapResult, arg1 error) *MockQueueReapExpiredCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockQueueReapExpiredCall) Do(f func(context.Context, time.Time) (contract.ReapResult, error)) *MockQueueReapExpiredCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockQueueReapExpiredCall) DoAndReturn(f func(context.Context, time.Time) (contract.ReapResult, error)) *MockQueueReapExpiredCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// Requeue mocks base method.
+func (m *MockQueue) Requeue(ctx context.Context, id, worker string, notBefore time.Time, refundAttempt bool) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Requeue", ctx, id, worker, notBefore, refundAttempt)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Requeue indicates an expected call of Requeue.
+func (mr *MockQueueMockRecorder) Requeue(ctx, id, worker, notBefore, refundAttempt any) *MockQueueRequeueCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Requeue", reflect.TypeOf((*MockQueue)(nil).Requeue), ctx, id, worker, notBefore, refundAttempt)
+	return &MockQueueRequeueCall{Call: call}
+}
+
+// MockQueueRequeueCall wrap *gomock.Call
+type MockQueueRequeueCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockQueueRequeueCall) Return(ok bool, err error) *MockQueueRequeueCall {
+	c.Call = c.Call.Return(ok, err)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockQueueRequeueCall) Do(f func(context.Context, string, string, time.Time, bool) (bool, error)) *MockQueueRequeueCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockQueueRequeueCall) DoAndReturn(f func(context.Context, string, string, time.Time, bool) (bool, error)) *MockQueueRequeueCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// MockFileStore is a mock of FileStore interface.
+type MockFileStore struct {
+	ctrl     *gomock.Controller
+	recorder *MockFileStoreMockRecorder
+	isgomock struct{}
+}
+
+// MockFileStoreMockRecorder is the mock recorder for MockFileStore.
+type MockFileStoreMockRecorder struct {
+	mock *MockFileStore
+}
+
+// NewMockFileStore creates a new mock instance.
+func NewMockFileStore(ctrl *gomock.Controller) *MockFileStore {
+	mock := &MockFileStore{ctrl: ctrl}
+	mock.recorder = &MockFileStoreMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockFileStore) EXPECT() *MockFileStoreMockRecorder {
+	return m.recorder
+}
+
+// Get mocks base method.
+func (m *MockFileStore) Get(ctx context.Context, contractID string) ([]byte, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Get", ctx, contractID)
+	ret0, _ := ret[0].([]byte)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Get indicates an expected call of Get.
+func (mr *MockFileStoreMockRecorder) Get(ctx, contractID any) *MockFileStoreGetCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockFileStore)(nil).Get), ctx, contractID)
+	return &MockFileStoreGetCall{Call: call}
+}
+
+// MockFileStoreGetCall wrap *gomock.Call
+type MockFileStoreGetCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockFileStoreGetCall) Return(arg0 []byte, arg1 error) *MockFileStoreGetCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockFileStoreGetCall) Do(f func(context.Context, string) ([]byte, error)) *MockFileStoreGetCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockFileStoreGetCall) DoAndReturn(f func(context.Context, string) ([]byte, error)) *MockFileStoreGetCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

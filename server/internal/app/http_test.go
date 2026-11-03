@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -81,22 +82,98 @@ type env struct {
 	mail     *fakeMailer
 	analyzer *fakeAnalyzer
 	app      *app.App
+
+	stopWorker context.CancelFunc // set while a worker is running
+	workerDone chan struct{}
 }
 
+// newEnv starts the server together with a worker that polls fast.
 func newEnv(t *testing.T) *env {
+	t.Helper()
+	e := newEnvWithoutWorker(t)
+	e.startWorker()
+	return e
+}
+
+// newEnvWithoutWorker starts only the API server: uploads wait in the queue until a worker is started.
+func newEnvWithoutWorker(t *testing.T) *env {
 	t.Helper()
 	pool := pgtest.New(t)
 	e := &env{t: t, mail: &fakeMailer{code: map[string]string{}}, analyzer: &fakeAnalyzer{result: sampleAnalysis()}}
 	cfg := config.Config{JWTSecret: "test-secret-at-least-16-chars"}
-	e.app = app.Build(pool, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), app.Overrides{Analyzer: e.analyzer, Mailer: e.mail})
+	e.app = app.Build(pool, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), app.Overrides{
+		Analyzer: e.analyzer,
+		Mailer:   e.mail,
+		TuneWorker: func(c *contractsvc.WorkerConfig) {
+			c.PollInterval = 10 * time.Millisecond
+			c.ReapInterval = 30 * time.Millisecond
+			c.ShutdownWait = 5 * time.Second
+		},
+	})
 	e.srv = httptest.NewServer(e.app.Echo)
 	t.Cleanup(func() {
 		e.srv.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		e.app.Contracts.Shutdown(ctx)
+		e.stopWorkerAndWait()
 	})
 	return e
+}
+
+func (e *env) startWorker() {
+	e.t.Helper()
+	if e.stopWorker != nil {
+		e.t.Fatal("the worker is already running")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.app.Worker.Run(ctx)
+	}()
+	e.stopWorker, e.workerDone = cancel, done
+}
+
+// stopWorkerAndWait stops the worker and waits until its running analysis (if any) is over.
+func (e *env) stopWorkerAndWait() {
+	if e.stopWorker == nil {
+		return
+	}
+	e.stopWorker()
+	select {
+	case <-e.workerDone:
+	case <-time.After(10 * time.Second):
+		e.t.Error("the worker did not stop")
+	}
+	e.stopWorker = nil
+}
+
+// sql runs a statement directly on the database, e.g. to make a job look old or its worker look dead.
+func (e *env) sql(query string, args ...any) {
+	e.t.Helper()
+	if _, err := e.app.PoolForTest().Exec(context.Background(), query, args...); err != nil {
+		e.t.Fatalf("%s: %v", query, err)
+	}
+}
+
+func (e *env) count(query string, args ...any) int {
+	e.t.Helper()
+	var n int
+	if err := e.app.PoolForTest().QueryRow(context.Background(), query, args...).Scan(&n); err != nil {
+		e.t.Fatalf("%s: %v", query, err)
+	}
+	return n
+}
+
+// eventually polls cond for up to 5 seconds.
+func (e *env) eventually(what string, cond func() bool) {
+	e.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	e.t.Fatalf("timed out waiting for: %s", what)
 }
 
 func sampleAnalysis() contract.Analysis {
@@ -198,8 +275,25 @@ func (e *env) waitDone(token, id string) resp {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	e.t.Fatal("분석이 끝나지 않았다")
+	e.t.Fatalf("분석이 끝나지 않았다\n%s", e.queueState(id))
 	return resp{}
+}
+
+// queueState describes where a contract is in the queue, for failure messages.
+func (e *env) queueState(id string) string {
+	var status string
+	var attempts int
+	var leaseUntil *time.Time
+	var lockedBy *string
+	var nextRun, dbNow time.Time
+	err := e.app.PoolForTest().QueryRow(context.Background(),
+		`SELECT status::text, attempts, lease_until, locked_by, next_run_at, now() FROM contract WHERE id = $1`, id).
+		Scan(&status, &attempts, &leaseUntil, &lockedBy, &nextRun, &dbNow)
+	if err != nil {
+		return "queue state unavailable: " + err.Error()
+	}
+	return fmt.Sprintf("queue state: status=%s attempts=%d lease_until=%v locked_by=%v next_run_at=%v | db now=%v, test now=%v",
+		status, attempts, leaseUntil, lockedBy, nextRun, dbNow, time.Now())
 }
 
 func wantErr(t *testing.T, r resp, status int, msg string) {
@@ -504,10 +598,11 @@ func TestDeleteDuringAnalysisDiscardsResult(t *testing.T) {
 		t.Fatalf("분석 중 삭제: %d", r.Status)
 	}
 	close(gate)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	e.app.Contracts.Shutdown(ctx) // wait until the analysis job finishes
+	e.stopWorkerAndWait() // wait until the worker has dealt with the finished analysis
 	wantErr(t, e.get("/api/v1/contracts/"+id, token), 404, "not found")
+	if n := e.count(`SELECT count(*) FROM contract_danger_clause`); n != 0 {
+		t.Errorf("지운 계약서의 조항이 저장되면 안 된다: %d", n)
+	}
 }
 
 func TestListContracts(t *testing.T) {
@@ -578,22 +673,94 @@ func TestListContracts(t *testing.T) {
 	}
 }
 
-func TestStalePendingIsMarkedFailedOnRead(t *testing.T) {
-	e := newEnv(t)
+// --- The analysis queue, end to end (HTTP, real worker, real Postgres) ---
+
+func TestUploadWaitsInTheQueueForAWorker(t *testing.T) {
+	e := newEnvWithoutWorker(t) // the API server alone: nobody analyses yet
 	token := e.login("a@b.com")
-	gate := make(chan struct{})
-	e.analyzer.set(sampleAnalysis(), nil, gate)
-	t.Cleanup(func() { close(gate) })
 	id := e.uploadPDF(token)
 
-	// make it look as if it was created 16 minutes ago
-	ctx := context.Background()
-	if _, err := e.app.PoolForTest().Exec(ctx, `UPDATE contract SET created_at = now() - interval '16 minutes' WHERE id = $1`, id); err != nil {
-		t.Fatal(err)
+	time.Sleep(100 * time.Millisecond)
+	if r := e.get("/api/v1/contracts/"+id, token); r.Body["status"] != "pending" {
+		t.Fatalf("worker가 없으면 pending으로 기다린다: %s", r.Raw)
 	}
-	r := e.get("/api/v1/contracts/"+id, token)
-	if r.Body["status"] != "failed" || r.Body["error"] != "분석이 중단됐어요. 다시 올려 주세요" {
-		t.Errorf("오래된 pending은 failed로 바뀐다: %s", r.Raw)
+	if n := e.count(`SELECT count(*) FROM contract_file WHERE contract_id = $1`, id); n != 1 {
+		t.Fatalf("기다리는 동안 PDF가 저장돼 있어야 한다: %d", n)
+	}
+
+	e.startWorker() // a worker shows up later (could be another process)
+	if done := e.waitDone(token, id); done.Body["status"] != "completed" {
+		t.Errorf("worker가 시작되면 처리된다: %s", done.Raw)
+	}
+}
+
+func TestPDFIsDeletedOnceTheAnalysisEnds(t *testing.T) {
+	e := newEnv(t)
+	token := e.login("a@b.com")
+
+	ok := e.uploadPDF(token)
+	if done := e.waitDone(token, ok); done.Body["status"] != "completed" {
+		t.Fatalf("완료: %s", done.Raw)
+	}
+
+	e.analyzer.set(contract.Analysis{}, &contractsvc.AnalysisError{Message: "글자를 읽지 못했어요"}, nil)
+	bad := e.uploadPDF(token)
+	if done := e.waitDone(token, bad); done.Body["status"] != "failed" {
+		t.Fatalf("실패: %s", done.Raw)
+	}
+
+	e.stopWorkerAndWait()
+	if n := e.count(`SELECT count(*) FROM contract_file`); n != 0 {
+		t.Errorf("끝난 분석의 PDF는 남지 않는다: %d", n)
+	}
+}
+
+// The scenario that used to lose the analysis for 15 minutes: the worker dies in the middle of a job.
+func TestAnalysisSurvivesAWorkerThatDied(t *testing.T) {
+	e := newEnvWithoutWorker(t)
+	token := e.login("a@b.com")
+	id := e.uploadPDF(token)
+
+	// a worker claimed the job and then died: it holds a lease that has run out and never finished
+	e.sql(`UPDATE contract SET attempts = 1, locked_by = 'dead-worker', lease_until = now() - interval '1 minute' WHERE id = $1`, id)
+
+	e.startWorker()
+	// the reaper takes the job back from the dead worker and schedules the retry
+	e.eventually("the job is requeued", func() bool {
+		return e.count(`SELECT count(*) FROM contract WHERE id = $1 AND lease_until IS NULL AND locked_by IS NULL AND next_run_at > now()`, id) == 1
+	})
+	if r := e.get("/api/v1/contracts/"+id, token); r.Body["status"] != "pending" {
+		t.Fatalf("그동안 사용자에게는 계속 분석 중이다: %s", r.Raw)
+	}
+
+	e.sql(`UPDATE contract SET next_run_at = now() WHERE id = $1`, id) // skip the 30 second retry delay
+	done := e.waitDone(token, id)
+	if done.Body["status"] != "completed" {
+		t.Fatalf("다른 worker(여기서는 새 worker)가 이어서 끝낸다: %s", done.Raw)
+	}
+	e.stopWorkerAndWait()
+	if n := e.count(`SELECT attempts FROM contract WHERE id = $1`, id); n != 2 {
+		t.Errorf("두 번째 시도에서 끝났다: attempts = %d", n)
+	}
+	if n := e.count(`SELECT count(*) FROM contract_file`); n != 0 {
+		t.Errorf("PDF는 지워진다: %d", n)
+	}
+}
+
+func TestJobThatWaitedTooLongInTheQueueFails(t *testing.T) {
+	e := newEnvWithoutWorker(t)
+	token := e.login("a@b.com")
+	id := e.uploadPDF(token)
+	e.sql(`UPDATE contract SET created_at = now() - interval '25 hours' WHERE id = $1`, id)
+
+	e.startWorker() // its reaper gives up on the old entry before anyone claims it
+	r := e.waitDone(token, id)
+	if r.Body["status"] != "failed" || r.Body["error"] != contract.QueueExpiredMessage {
+		t.Errorf("오래 기다린 건 실패 처리된다: %s", r.Raw)
+	}
+	e.stopWorkerAndWait()
+	if n := e.count(`SELECT count(*) FROM contract_file`); n != 0 {
+		t.Errorf("PDF도 지워진다: %d", n)
 	}
 }
 

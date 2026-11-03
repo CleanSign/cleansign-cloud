@@ -23,6 +23,24 @@ const defaultAdminURL = "postgres://postgres:mysecretpassword@localhost:5433/pos
 // New returns a pool for a temporary DB with migrations applied, and drops it when the test ends.
 func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	pool := NewUnmigrated(t)
+	if err := database.Migrate(context.Background(), pool); err != nil {
+		t.Fatalf("마이그레이션: %v", err)
+	}
+	return pool
+}
+
+// AdminURL is the connection URL of the Postgres the tests create their temporary databases on.
+func AdminURL() string {
+	if u := os.Getenv("TEST_DATABASE_URL"); u != "" {
+		return u
+	}
+	return defaultAdminURL
+}
+
+// NewUnmigrated returns a pool for an empty temporary DB (no tables), and drops it when the test ends.
+func NewUnmigrated(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	adminURL := os.Getenv("TEST_DATABASE_URL")
 	if adminURL == "" {
 		adminURL = defaultAdminURL
@@ -68,8 +86,5 @@ func New(t *testing.T) *pgxpool.Pool {
 		_, _ = a.Exec(c, fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, name))
 	})
 
-	if err := database.Migrate(ctx, pool); err != nil {
-		t.Fatalf("마이그레이션: %v", err)
-	}
 	return pool
 }

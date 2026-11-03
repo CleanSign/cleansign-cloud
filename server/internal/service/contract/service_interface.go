@@ -11,10 +11,10 @@ import (
 
 // Service는 contract 흐름의 공개 메서드다. handler가 이 인터페이스에 의존하고, 테스트에서는 mock으로 바꾼다.
 type Service interface {
-	// Submit validates the upload, creates a pending contract, and starts the analysis. It does not wait for the analysis.
+	// Submit validates the upload and puts it in the analysis queue together with the PDF. It does not wait for the analysis:
+	// a worker (in this process or another) picks the job up.
 	Submit(ctx context.Context, userID, fileName, contentType string, size int64, body io.Reader) (string, error)
 	// Get returns the caller's own contract. Clauses are included only when it is completed.
-	// If pending is stale, it is treated as a lost job and marked failed before being returned.
 	Get(ctx context.Context, userID, id string) (contract.Contract, []contract.Clause, error)
 	// Clause returns one clause of a completed contract.
 	Clause(ctx context.Context, userID, contractID, clauseID string) (contract.Clause, error)
@@ -24,8 +24,4 @@ type Service interface {
 	Recent(ctx context.Context, userID string, limit int) ([]contract.Summary, error)
 	// Delete deletes the caller's contract and its analysis results.
 	Delete(ctx context.Context, userID, id string) error
-	// SweepStale marks stale pending contracts as failed. It cleans up jobs lost when the server went down.
-	SweepStale(ctx context.Context) error
-	// Shutdown waits for in-flight analyses until ctx ends. After that, it cancels the remaining jobs.
-	Shutdown(ctx context.Context)
 }

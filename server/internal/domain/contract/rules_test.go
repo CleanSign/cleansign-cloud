@@ -2,7 +2,6 @@ package contract
 
 import (
 	"testing"
-	"time"
 )
 
 func TestClampInt32(t *testing.T) {
@@ -53,22 +52,6 @@ func TestValidateUpload(t *testing.T) {
 		if got := ValidateUpload(c.name, c.mime, c.size); got != c.want {
 			t.Errorf("ValidateUpload(%q, %q, %d) = %v, want %v", c.name, c.mime, c.size, got, c.want)
 		}
-	}
-}
-
-func TestIsStale(t *testing.T) {
-	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	c := Contract{Status: StatusPending, CreatedAt: now.Add(-StaleAfter)}
-	if c.IsStale(now) {
-		t.Error("정확히 15분은 아직 stale이 아니다")
-	}
-	c.CreatedAt = now.Add(-StaleAfter - time.Second)
-	if !c.IsStale(now) {
-		t.Error("15분을 넘으면 stale이다")
-	}
-	c.Status = StatusCompleted
-	if c.IsStale(now) {
-		t.Error("pending이 아니면 stale이 아니다")
 	}
 }
 

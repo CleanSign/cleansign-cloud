@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -129,12 +128,17 @@ func (r *ContractRepo) Complete(ctx context.Context, id string, res contract.Res
 		return false, err
 	}
 	if updated == 0 {
-		return false, nil // the user deleted it during analysis: discard the result
+		// deleted during analysis, or already finished by another worker: discard this result
+		return false, nil
 	}
 	for _, c := range clauses {
 		if err := q.InsertClause(ctx, insertClauseParams(c)); err != nil {
 			return false, err
 		}
+	}
+	// the PDF is no longer needed once the result is saved
+	if err := q.DeleteContractFile(ctx, id); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
@@ -142,18 +146,22 @@ func (r *ContractRepo) Complete(ctx context.Context, id string, res contract.Res
 	return true, nil
 }
 
+// Fail marks a pending contract failed and deletes its PDF, in one transaction.
 func (r *ContractRepo) Fail(ctx context.Context, id, message string) error {
-	_, err := r.q.FailContract(ctx, sqlc.FailContractParams{ID: id, ErrorMessage: &message})
-	return err
-}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a rollback after commit is ignored
 
-func (r *ContractRepo) FailIfStale(ctx context.Context, id string, createdBefore time.Time, message string) error {
-	_, err := r.q.FailStaleContract(ctx, sqlc.FailStaleContractParams{ID: id, CreatedAt: createdBefore, ErrorMessage: &message})
-	return err
-}
-
-func (r *ContractRepo) FailAllStale(ctx context.Context, createdBefore time.Time, message string) (int64, error) {
-	return r.q.FailStaleContracts(ctx, sqlc.FailStaleContractsParams{CreatedAt: createdBefore, ErrorMessage: &message})
+	q := r.q.WithTx(tx)
+	if _, err := q.FailContract(ctx, sqlc.FailContractParams{ID: id, ErrorMessage: &message}); err != nil {
+		return err
+	}
+	if err := q.DeleteContractFile(ctx, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // --- Conversion ---

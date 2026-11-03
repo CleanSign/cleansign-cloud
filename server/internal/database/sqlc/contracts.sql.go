@@ -23,8 +23,10 @@ SET status = 'completed',
     warnings = $9,
     risk_flow = $10,
     progress = NULL,
-    error_message = NULL
-WHERE id = $1
+    error_message = NULL,
+    lease_until = NULL,
+    locked_by = NULL
+WHERE id = $1 AND status = 'pending'
 `
 
 type CompleteContractParams struct {
@@ -40,6 +42,7 @@ type CompleteContractParams struct {
 	RiskFlow      []byte
 }
 
+// Only a job that is still pending can complete. A second worker that finishes after another one already did is ignored.
 func (q *Queries) CompleteContract(ctx context.Context, arg CompleteContractParams) (int64, error) {
 	result, err := q.db.Exec(ctx, completeContract,
 		arg.ID,
@@ -113,8 +116,8 @@ func (q *Queries) DeleteContractForUser(ctx context.Context, arg DeleteContractF
 
 const failContract = `-- name: FailContract :execrows
 UPDATE contract
-SET status = 'failed', error_message = $2, progress = NULL
-WHERE id = $1
+SET status = 'failed', error_message = $2, progress = NULL, lease_until = NULL, locked_by = NULL
+WHERE id = $1 AND status = 'pending'
 `
 
 type FailContractParams struct {
@@ -130,47 +133,8 @@ func (q *Queries) FailContract(ctx context.Context, arg FailContractParams) (int
 	return result.RowsAffected(), nil
 }
 
-const failStaleContract = `-- name: FailStaleContract :execrows
-UPDATE contract
-SET status = 'failed', error_message = $3, progress = NULL
-WHERE id = $1 AND status = 'pending' AND created_at < $2
-`
-
-type FailStaleContractParams struct {
-	ID           string
-	CreatedAt    time.Time
-	ErrorMessage *string
-}
-
-func (q *Queries) FailStaleContract(ctx context.Context, arg FailStaleContractParams) (int64, error) {
-	result, err := q.db.Exec(ctx, failStaleContract, arg.ID, arg.CreatedAt, arg.ErrorMessage)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const failStaleContracts = `-- name: FailStaleContracts :execrows
-UPDATE contract
-SET status = 'failed', error_message = $2, progress = NULL
-WHERE status = 'pending' AND created_at < $1
-`
-
-type FailStaleContractsParams struct {
-	CreatedAt    time.Time
-	ErrorMessage *string
-}
-
-func (q *Queries) FailStaleContracts(ctx context.Context, arg FailStaleContractsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, failStaleContracts, arg.CreatedAt, arg.ErrorMessage)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const getContractByID = `-- name: GetContractByID :one
-SELECT id, user_id, file_name, file_key, mime_type, status, loss_amount, risk_score, grade, loss_min, loss_max, deposit_amount, model_version, warnings, risk_flow, progress, error_message, created_at FROM contract WHERE id = $1
+SELECT id, user_id, file_name, file_key, mime_type, status, loss_amount, risk_score, grade, loss_min, loss_max, deposit_amount, model_version, warnings, risk_flow, progress, error_message, created_at, attempts, next_run_at, lease_until, locked_by FROM contract WHERE id = $1
 `
 
 func (q *Queries) GetContractByID(ctx context.Context, id string) (Contract, error) {
@@ -195,12 +159,16 @@ func (q *Queries) GetContractByID(ctx context.Context, id string) (Contract, err
 		&i.Progress,
 		&i.ErrorMessage,
 		&i.CreatedAt,
+		&i.Attempts,
+		&i.NextRunAt,
+		&i.LeaseUntil,
+		&i.LockedBy,
 	)
 	return i, err
 }
 
 const getContractForUser = `-- name: GetContractForUser :one
-SELECT id, user_id, file_name, file_key, mime_type, status, loss_amount, risk_score, grade, loss_min, loss_max, deposit_amount, model_version, warnings, risk_flow, progress, error_message, created_at FROM contract WHERE id = $1 AND user_id = $2
+SELECT id, user_id, file_name, file_key, mime_type, status, loss_amount, risk_score, grade, loss_min, loss_max, deposit_amount, model_version, warnings, risk_flow, progress, error_message, created_at, attempts, next_run_at, lease_until, locked_by FROM contract WHERE id = $1 AND user_id = $2
 `
 
 type GetContractForUserParams struct {
@@ -230,6 +198,10 @@ func (q *Queries) GetContractForUser(ctx context.Context, arg GetContractForUser
 		&i.Progress,
 		&i.ErrorMessage,
 		&i.CreatedAt,
+		&i.Attempts,
+		&i.NextRunAt,
+		&i.LeaseUntil,
+		&i.LockedBy,
 	)
 	return i, err
 }

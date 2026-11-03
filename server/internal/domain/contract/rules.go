@@ -5,15 +5,11 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const (
 	// MaxUploadBytes is the maximum size of an uploadable PDF.
 	MaxUploadBytes = 10 * 1024 * 1024
-
-	// StaleAfter: a contract still pending after this is considered to have lost its analysis job.
-	StaleAfter = 15 * time.Minute
 
 	// StaleMessage is the message shown to the user when a lost analysis is changed to failed.
 	StaleMessage = "분석이 중단됐어요. 다시 올려 주세요"
@@ -61,11 +57,6 @@ func ValidateUpload(fileName, contentType string, size int64) error {
 		return ErrBadSize
 	}
 	return nil
-}
-
-// IsStale reports whether pending has lasted long enough to consider the analysis job lost.
-func (c Contract) IsStale(now time.Time) bool {
-	return c.Status == StatusPending && now.Sub(c.CreatedAt) > StaleAfter
 }
 
 // NormalizePage adjusts the page and limit strings received from the query.

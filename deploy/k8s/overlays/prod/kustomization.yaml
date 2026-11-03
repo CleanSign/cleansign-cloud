@@ -1,0 +1,97 @@
+# prod overlay (skeleton): the real cluster (a new computer or managed Kubernetes). Not deployed anywhere yet.
+# Render it without a cluster:  kubectl kustomize deploy/k8s/overlays/prod
+#
+# Before the first real deploy, replace the CHANGE_ME values and provide the Secret (see below).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cleansign
+
+resources:
+  - ../../base
+
+# Images come from GHCR, pushed by .github/workflows/images.yml. All three share one tag: the short commit SHA.
+# To deploy a commit, set every newTag to that SHA (later automated: the deploy workflow commits this change).
+images:
+  - name: cleansign/server
+    newName: ghcr.io/cleansign/cleansign-cloud/server
+    newTag: CHANGE_ME
+  - name: cleansign/ai-service
+    newName: ghcr.io/cleansign/cleansign-cloud/ai-service
+    newTag: CHANGE_ME
+  - name: cleansign/web
+    newName: ghcr.io/cleansign/cleansign-cloud/web
+    newTag: CHANGE_ME
+
+# Unlike the local overlay there is NO secretGenerator here: real secrets must not be generated from a file in this repo.
+# The Secret `cleansign-secrets` (keys: POSTGRES_PASSWORD, JWT_SECRET, INTERNAL_TOKEN) must already exist in the namespace.
+# How to provide it (SOPS, Sealed Secrets, External Secrets, ...) is still to be decided.
+
+patches:
+  # Cookies are marked Secure in production (the site is served over https).
+  # The server reads COOKIE_SECURE=true; web gets the same value.
+  - target:
+      kind: Deployment
+      name: server
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: server
+      spec:
+        template:
+          spec:
+            containers:
+              - name: server
+                env:
+                  - name: COOKIE_SECURE
+                    value: "true"
+  - target:
+      kind: Deployment
+      name: web
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: web
+      spec:
+        template:
+          spec:
+            containers:
+              - name: web
+                env:
+                  - name: COOKIE_SECURE
+                    value: "true"
+
+  # Host name and TLS. The `rules` list is replaced as a whole (it has no merge key), so the path is repeated.
+  # Needs cert-manager and a ClusterIssuer named letsencrypt-prod in the cluster, and a real domain (neither exists yet).
+  - target:
+      kind: Ingress
+      name: cleansign
+    patch: |-
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: cleansign
+        annotations:
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+      spec:
+        tls:
+          - hosts:
+              - cleansign.example.com
+            secretName: cleansign-tls
+        rules:
+          - host: cleansign.example.com
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: web
+                      port:
+                        name: http
+
+# Still the same as the base, to be decided before real users:
+#   ai-service LLM_PROVIDER=mock (a real LLM needs a provider integration), server replicas 1 (until the analysis queue exists),
+#   Postgres inside the cluster (a managed DB or backups are needed).

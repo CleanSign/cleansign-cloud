@@ -24,6 +24,16 @@ type AI struct {
 	Timeout time.Duration
 }
 
+// Worker configures the analysis worker.
+type Worker struct {
+	// Embedded runs a worker inside the API server process. Turn it off when workers run as their own processes.
+	Embedded bool
+	// Concurrency is how many analyses one worker runs at once.
+	Concurrency int
+	// HealthPort is where a separate worker process (`server worker`) answers /healthz.
+	HealthPort string
+}
+
 type Config struct {
 	Port         string
 	DatabaseURL  string
@@ -31,14 +41,21 @@ type Config struct {
 	CookieSecure bool
 	SMTP         SMTP
 	AI           AI
+	Worker       Worker
 }
 
 const minSecretLen = 16
 
-// Load reads environment variables and reports what is wrong if a required value is missing.
+// Load reads the settings of the API server and reports what is wrong if a required value is missing.
 func Load() (Config, error) { return load(os.Getenv) }
 
-func load(get func(string) string) (Config, error) {
+// LoadWorker reads the settings of a separate worker process. It needs the database and the AI server,
+// but not the secrets that only the API uses (JWT, SMTP).
+func LoadWorker() (Config, error) { return loadFor(os.Getenv, false) }
+
+func load(get func(string) string) (Config, error) { return loadFor(get, true) }
+
+func loadFor(get func(string) string, api bool) (Config, error) {
 	var problems []string
 	str := func(key, def string) string {
 		if v := strings.TrimSpace(get(key)); v != "" {
@@ -76,12 +93,17 @@ func load(get func(string) string) (Config, error) {
 			Token:   str("AI_SERVICE_TOKEN", ""),
 			Timeout: time.Duration(integer("AI_SERVICE_TIMEOUT_MS", 600_000)) * time.Millisecond,
 		},
+		Worker: Worker{
+			Embedded:    !strings.EqualFold(str("WORKER_EMBEDDED", "true"), "false"),
+			Concurrency: integer("WORKER_CONCURRENCY", 1),
+			HealthPort:  str("WORKER_HEALTH_PORT", "4001"),
+		},
 	}
 
 	if cfg.DatabaseURL == "" {
 		problems = append(problems, "DATABASE_URL이 필요해요")
 	}
-	if len(cfg.JWTSecret) < minSecretLen {
+	if api && len(cfg.JWTSecret) < minSecretLen {
 		problems = append(problems, fmt.Sprintf("JWT_SECRET이 필요해요 (%d자 이상)", minSecretLen))
 	}
 	if len(problems) > 0 {

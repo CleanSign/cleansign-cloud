@@ -115,6 +115,10 @@ type Contract struct {
 	Progress      []byte
 	ErrorMessage  *string
 	CreatedAt     time.Time
+	Attempts      int32
+	NextRunAt     time.Time
+	LeaseUntil    *time.Time
+	LockedBy      *string
 }
 
 type ContractDangerClause struct {
@@ -131,6 +135,12 @@ type ContractDangerClause struct {
 	SafeText     string
 	OrderIndex   int32
 	CreatedAt    time.Time
+}
+
+type ContractFile struct {
+	ContractID string
+	Data       []byte
+	CreatedAt  time.Time
 }
 
 type EmailCode struct {

@@ -1,0 +1,20 @@
+# Ingress: 클러스터 밖에서 들어오는 HTTP 요청을 어느 Service 로 보낼지 정한다.
+# 실제로 요청을 받아 전달하는 것은 Ingress 컨트롤러(k3s 는 Traefik 이 기본 포함)다. 이 파일은 "규칙"만 적는다.
+#
+# 지금은 모든 경로(/)를 web 으로 보낸다. /api/v1 은 web 이 server 로 넘기므로(rewrites) 여기서 나누지 않는다.
+# host 를 지정하지 않아서 어떤 주소(localhost, VM IP)로 와도 매칭된다. 도메인을 쓰게 되면 overlay 에서 host 를 추가한다.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cleansign
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  name: http

@@ -1,0 +1,2 @@
+# 실제 비밀값. 예시 파일(*.example)만 Git 에 올린다.
+secrets.env

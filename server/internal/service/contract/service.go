@@ -3,12 +3,8 @@ package contract
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"log/slog"
-	"sync"
-	"time"
 
 	"github.com/CleanSign/cleansign/server/internal/domain/contract"
 	"github.com/CleanSign/cleansign/server/internal/shared/clock"
@@ -26,29 +22,22 @@ const (
 //go:generate go tool ifacemaker -f service.go -s service -i Service -p contractgen -o service_interface.go -y "Service는 contract 흐름의 공개 메서드다. handler가 이 인터페이스에 의존하고, 테스트에서는 mock으로 바꾼다."
 //go:generate perl -pi -e "s/^package contractgen/package contract/" service_interface.go
 type service struct {
-	repo     Repository
-	analyzer Analyzer
-	clock    clock.Clock
-	log      *slog.Logger
-
-	// Analysis jobs run detached from the request context. Shutdown waits for them on exit.
-	jobTimeout time.Duration
-	baseCtx    context.Context
-	cancelBase context.CancelFunc
-	jobs       sync.WaitGroup
+	repo  Repository
+	queue Queue
+	clock clock.Clock
 }
 
-func NewService(repo Repository, analyzer Analyzer, clk clock.Clock, log *slog.Logger, jobTimeout time.Duration) Service {
-	base, cancel := context.WithCancel(context.Background())
-	return &service{repo: repo, analyzer: analyzer, clock: clk, log: log, jobTimeout: jobTimeout, baseCtx: base, cancelBase: cancel}
+func NewService(repo Repository, queue Queue, clk clock.Clock) Service {
+	return &service{repo: repo, queue: queue, clock: clk}
 }
 
-// Submit validates the upload, creates a pending contract, and starts the analysis. It does not wait for the analysis.
+// Submit validates the upload and puts it in the analysis queue together with the PDF. It does not wait for the analysis:
+// a worker (in this process or another) picks the job up.
 func (s *service) Submit(ctx context.Context, userID, fileName, contentType string, size int64, body io.Reader) (string, error) {
 	if err := contract.ValidateUpload(fileName, contentType, size); err != nil {
 		return "", err
 	}
-	// the file is used after the request ends, so read it fully into memory
+	// the declared size is not trusted: read at most one byte more than allowed
 	data, err := io.ReadAll(io.LimitReader(body, contract.MaxUploadBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read upload: %w", err)
@@ -67,84 +56,17 @@ func (s *service) Submit(ctx context.Context, userID, fileName, contentType stri
 		Progress:  &progress,
 		CreatedAt: s.clock.Now(),
 	}
-	if err := s.repo.Create(ctx, c); err != nil {
+	if err := s.queue.Enqueue(ctx, c, data); err != nil {
 		return "", err
 	}
-
-	s.jobs.Add(1)
-	go func() {
-		defer s.jobs.Done()
-		s.runAnalysis(c.ID, fileName, data)
-	}()
 	return c.ID, nil
 }
 
-// runAnalysis runs the AI analysis and saves the result. On failure it marks the contract failed.
-func (s *service) runAnalysis(id, fileName string, data []byte) {
-	ctx, cancel := context.WithTimeout(s.baseCtx, s.jobTimeout)
-	defer cancel()
-
-	defer func() {
-		if r := recover(); r != nil {
-			s.log.Error("analysis panicked", "contract", id, "panic", r)
-			s.fail(id, saveFailedMsg)
-		}
-	}()
-
-	analysis, err := s.analyzer.Analyze(ctx, fileName, data, func(p contract.Progress) error {
-		return s.repo.UpdateProgress(ctx, id, p)
-	})
-	if err != nil {
-		var ae *AnalysisError
-		if errors.As(err, &ae) {
-			s.log.Warn("analysis failed", "contract", id, "reason", ae.Message, "error", ae.Err)
-			s.fail(id, ae.Message)
-			return
-		}
-		s.log.Error("analysis failed", "contract", id, "error", err)
-		s.fail(id, saveFailedMsg)
-		return
-	}
-
-	clauses := contract.ClausesFrom(id, analysis)
-	for i := range clauses {
-		clauses[i].ID = ids.New()
-	}
-	saved, err := s.repo.Complete(ctx, id, contract.ResultFrom(analysis), clauses)
-	if err != nil {
-		s.log.Error("save analysis failed", "contract", id, "error", err)
-		s.fail(id, saveFailedMsg)
-		return
-	}
-	if !saved {
-		s.log.Info("contract deleted during analysis; result discarded", "contract", id)
-	}
-}
-
-// fail uses a separate context so it can record the failure state even after cancellation by the shutdown signal.
-func (s *service) fail(id, message string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.baseCtx), 5*time.Second)
-	defer cancel()
-	if err := s.repo.Fail(ctx, id, message); err != nil {
-		s.log.Error("mark contract failed", "contract", id, "error", err)
-	}
-}
-
 // Get returns the caller's own contract. Clauses are included only when it is completed.
-// If pending is stale, it is treated as a lost job and marked failed before being returned.
 func (s *service) Get(ctx context.Context, userID, id string) (contract.Contract, []contract.Clause, error) {
 	c, err := s.repo.Get(ctx, userID, id)
 	if err != nil {
 		return contract.Contract{}, nil, err
-	}
-	now := s.clock.Now()
-	if c.IsStale(now) {
-		if err := s.repo.FailIfStale(ctx, id, now.Add(-contract.StaleAfter), contract.StaleMessage); err != nil {
-			return contract.Contract{}, nil, err
-		}
-		if c, err = s.repo.Get(ctx, userID, id); err != nil {
-			return contract.Contract{}, nil, err
-		}
 	}
 	if c.Status != contract.StatusCompleted {
 		return c, nil, nil
@@ -193,33 +115,4 @@ func (s *service) Delete(ctx context.Context, userID, id string) error {
 		return errs.ErrNotFound
 	}
 	return nil
-}
-
-// SweepStale marks stale pending contracts as failed. It cleans up jobs lost when the server went down.
-func (s *service) SweepStale(ctx context.Context) error {
-	n, err := s.repo.FailAllStale(ctx, s.clock.Now().Add(-contract.StaleAfter), contract.StaleMessage)
-	if err != nil {
-		return err
-	}
-	if n > 0 {
-		s.log.Info("stale analyses marked failed", "count", n)
-	}
-	return nil
-}
-
-// Shutdown waits for in-flight analyses until ctx ends. After that, it cancels the remaining jobs.
-func (s *service) Shutdown(ctx context.Context) {
-	done := make(chan struct{})
-	go func() {
-		s.jobs.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		s.log.Warn("shutdown timeout; cancelling running analyses")
-		s.cancelBase()
-		<-done
-	}
-	s.cancelBase()
 }
