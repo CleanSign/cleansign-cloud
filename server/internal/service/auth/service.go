@@ -15,9 +15,9 @@ import (
 	"github.com/CleanSign/cleansign/server/internal/shared/ids"
 )
 
-// 생성 패키지 이름을 임시로 다르게 주는 이유: domain/auth와 이름이 같으면 생성기가 `auth.` 접두사를 지워 버린다.
+// The generated package gets a temporary different name: if it matched domain/auth, the generator would strip the `auth.` prefix.
 //
-//go:generate go tool ifacemaker -f service.go -s service -i Service -p authgen -o service_interface.go -y "Service는 auth 흐름의 공개 메서드다. handler가 이 인터페이스에 의존하고, 테스트에서는 mock으로 바꾼다."
+//go:generate go tool ifacemaker -f service.go -s service -i Service -p authgen -o service_interface.go -y "Service is the public surface of the auth flow. The handler depends on this interface, and tests swap in a mock."
 //go:generate perl -pi -e "s/^package authgen/package auth/; s/auth[.]ConfirmResult/ConfirmResult/g" service_interface.go
 type service struct {
 	codes      CodeRepository

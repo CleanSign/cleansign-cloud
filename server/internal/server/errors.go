@@ -86,6 +86,8 @@ func classify(err error) (int, string) {
 		return http.StatusBadRequest, auth.ErrCodeExpired.Error()
 	case errors.Is(err, auth.ErrCodeInvalid):
 		return http.StatusBadRequest, auth.ErrCodeInvalid.Error()
+	case errors.Is(err, auth.ErrMailSend):
+		return http.StatusServiceUnavailable, auth.ErrMailSend.Error()
 
 	case errors.As(err, &echoE):
 		if msg, ok := echoE.Message.(string); ok {
