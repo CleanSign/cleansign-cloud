@@ -15,9 +15,9 @@ import (
 	"github.com/CleanSign/cleansign/server/internal/shared/ids"
 )
 
-// 생성 패키지 이름을 임시로 다르게 주는 이유: domain/auth와 이름이 같으면 생성기가 `auth.` 접두사를 지워 버린다.
+// The generated package gets a temporary different name: if it matched domain/auth, the generator would strip the `auth.` prefix.
 //
-//go:generate go tool ifacemaker -f service.go -s service -i Service -p authgen -o service_interface.go -y "Service는 auth 흐름의 공개 메서드다. handler가 이 인터페이스에 의존하고, 테스트에서는 mock으로 바꾼다."
+//go:generate go tool ifacemaker -f service.go -s service -i Service -p authgen -o service_interface.go -y "Service is the public surface of the auth flow. The handler depends on this interface, and tests swap in a mock."
 //go:generate perl -pi -e "s/^package authgen/package auth/; s/auth[.]ConfirmResult/ConfirmResult/g" service_interface.go
 type service struct {
 	codes      CodeRepository
@@ -57,20 +57,23 @@ func (s *service) SendCode(ctx context.Context, rawEmail string) (time.Duration,
 	if err != nil {
 		return 0, err
 	}
+	sendCount, windowStartedAt := existing.NextSend(now)
 	if err := s.codes.Upsert(ctx, auth.EmailCode{
-		Email:     email,
-		CodeHash:  auth.HashCode(s.codeSecret, email, code),
-		SentAt:    now,
-		ExpiresAt: now.Add(auth.CodeTTL),
+		Email:           email,
+		CodeHash:        auth.HashCode(s.codeSecret, email, code),
+		SentAt:          now,
+		ExpiresAt:       now.Add(auth.CodeTTL),
+		SendCount:       sendCount,
+		WindowStartedAt: windowStartedAt,
 	}); err != nil {
 		return 0, err
 	}
 	if err := s.mailer.SendCode(ctx, email, code, auth.CodeTTL); err != nil {
-		// if sending failed, clear it so the user can request again right away without waiting
+		// nothing was sent: drop the row so the user can retry right away, and don't count it against the window
 		if delErr := s.codes.Delete(ctx, email); delErr != nil {
 			s.log.Warn("failed to delete unsent code", "error", delErr)
 		}
-		return 0, fmt.Errorf("send code mail: %w", err)
+		return 0, fmt.Errorf("%w: %w", auth.ErrMailSend, err)
 	}
 	return auth.ResendCooldown, nil
 }

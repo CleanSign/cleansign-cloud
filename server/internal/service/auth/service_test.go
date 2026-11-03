@@ -198,48 +198,74 @@ func TestSendCode(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := f.svc.SendCode(ctx, "not-an-email"); !errors.Is(err, user.ErrInvalidEmail) {
-		t.Errorf("이메일 형식 오류: %v", err)
+		t.Errorf("invalid email: %v", err)
 	}
 	wait, err := f.svc.SendCode(ctx, "  User@Example.com ")
 	if err != nil || wait != auth.ResendCooldown {
 		t.Fatalf("SendCode: %v %v", wait, err)
 	}
 	if f.mail.to != "user@example.com" || len(f.mail.last) != 6 {
-		t.Errorf("정규화한 주소로 6자리 코드를 보내야 한다: %q %q", f.mail.to, f.mail.last)
+		t.Errorf("must send a 6-digit code to the normalized address: %q %q", f.mail.to, f.mail.last)
 	}
 	stored := f.store.codes["user@example.com"]
 	if stored.CodeHash == "" || strings.Contains(stored.CodeHash, f.mail.last) {
-		t.Error("코드는 해시로만 저장한다")
+		t.Error("the code is stored only as a hash")
 	}
 
 	// cannot resend within the cooldown
 	f.clk.Advance(10 * time.Second)
 	var retry *auth.RetryAfterError
 	if _, err := f.svc.SendCode(ctx, "user@example.com"); !errors.As(err, &retry) || retry.After != 50*time.Second {
-		t.Errorf("쿨다운 오류: %v", err)
+		t.Errorf("cooldown error: %v", err)
 	}
 	// after the cooldown, a new code is sent and the old code becomes invalid
 	old := f.mail.last
 	f.clk.Advance(51 * time.Second)
 	if _, err := f.svc.SendCode(ctx, "user@example.com"); err != nil {
-		t.Fatalf("재발송: %v", err)
+		t.Fatalf("resend: %v", err)
 	}
 	if old != f.mail.last { // skip if the same code happened to come up
 		if _, err := f.svc.Confirm(ctx, "user@example.com", old, false); !errors.Is(err, auth.ErrCodeInvalid) {
-			t.Errorf("이전 코드는 거절돼야 한다: %v", err)
+			t.Errorf("the previous code must be rejected: %v", err)
 		}
+	}
+}
+
+func TestSendCodeWindowLimit(t *testing.T) {
+	f := newFixture()
+	ctx := context.Background()
+	step := auth.ResendCooldown + time.Second
+	for i := 0; i < auth.MaxSendsPerWindow; i++ {
+		if _, err := f.svc.SendCode(ctx, "a@b.com"); err != nil {
+			t.Fatalf("send %d: %v", i+1, err)
+		}
+		f.clk.Advance(step)
+	}
+	var retry *auth.RetryAfterError
+	if _, err := f.svc.SendCode(ctx, "a@b.com"); !errors.As(err, &retry) {
+		t.Fatalf("6th send in the window must be refused: %v", err)
+	}
+	if want := auth.SendWindow - time.Duration(auth.MaxSendsPerWindow)*step; retry.After != want {
+		t.Errorf("wait until the window ends: got %v want %v", retry.After, want)
+	}
+	f.clk.Advance(retry.After)
+	if _, err := f.svc.SendCode(ctx, "a@b.com"); err != nil {
+		t.Errorf("a new window starts after an hour: %v", err)
+	}
+	if f.store.codes["a@b.com"].SendCount != 1 {
+		t.Errorf("counter restarts at 1: %+v", f.store.codes["a@b.com"])
 	}
 }
 
 func TestSendCodeMailFailureAllowsRetry(t *testing.T) {
 	f := newFixture()
 	f.mail.fail = errors.New("smtp down")
-	if _, err := f.svc.SendCode(context.Background(), "a@b.com"); err == nil {
-		t.Fatal("메일 실패는 오류여야 한다")
+	if _, err := f.svc.SendCode(context.Background(), "a@b.com"); !errors.Is(err, auth.ErrMailSend) {
+		t.Fatalf("mail failure must be ErrMailSend: %v", err)
 	}
 	f.mail.fail = nil
 	if _, err := f.svc.SendCode(context.Background(), "a@b.com"); err != nil {
-		t.Errorf("보내지 못했으면 쿨다운 없이 다시 보낼 수 있어야 한다: %v", err)
+		t.Errorf("after a failed send, a retry must be allowed without cooldown: %v", err)
 	}
 }
 
@@ -253,16 +279,16 @@ func TestConfirmSignsUpAndLogsIn(t *testing.T) {
 		t.Fatalf("Confirm: %v", err)
 	}
 	if res.User.Email != "new@user.com" || !res.User.EmailVerified || res.User.ID == "" {
-		t.Errorf("신규 가입: %+v", res.User)
+		t.Errorf("new sign-up: %+v", res.User)
 	}
 	if _, ok := f.store.codes["new@user.com"]; ok {
-		t.Error("성공하면 코드를 지운다")
+		t.Error("the code is deleted on success")
 	}
 	if len(f.store.sessions) != 1 {
-		t.Errorf("세션이 하나 생겨야 한다: %d", len(f.store.sessions))
+		t.Errorf("exactly one session must be created: %d", len(f.store.sessions))
 	}
 	if want := f.clk.Now().Add(auth.RefreshTTL); !res.Tokens.RefreshExpiresAt.Equal(want) {
-		t.Errorf("refresh 수명 72시간: %v", res.Tokens.RefreshExpiresAt)
+		t.Errorf("refresh lifetime is 72 hours: %v", res.Tokens.RefreshExpiresAt)
 	}
 
 	// logging in again with the same email gives the same user
@@ -270,10 +296,10 @@ func TestConfirmSignsUpAndLogsIn(t *testing.T) {
 	f.svc.SendCode(ctx, "new@user.com")
 	again, err := f.svc.Confirm(ctx, "new@user.com", f.mail.last, true)
 	if err != nil || again.User.ID != res.User.ID {
-		t.Errorf("기존 사용자로 로그인: %+v %v", again.User, err)
+		t.Errorf("log in as the existing user: %+v %v", again.User, err)
 	}
 	if want := f.clk.Now().Add(auth.RememberRefreshTTL); !again.Tokens.RefreshExpiresAt.Equal(want) {
-		t.Errorf("기기 기억이면 30일: %v", again.Tokens.RefreshExpiresAt)
+		t.Errorf("remember-device means 30 days: %v", again.Tokens.RefreshExpiresAt)
 	}
 }
 
@@ -282,7 +308,7 @@ func TestConfirmRejections(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := f.svc.Confirm(ctx, "a@b.com", "123456", false); !errors.Is(err, auth.ErrCodeExpired) {
-		t.Errorf("코드를 요청한 적이 없으면 만료로 본다: %v", err)
+		t.Errorf("no code requested counts as expired: %v", err)
 	}
 
 	f.svc.SendCode(ctx, "a@b.com")
@@ -293,11 +319,11 @@ func TestConfirmRejections(t *testing.T) {
 	}
 	for i := 0; i < auth.MaxAttempts; i++ {
 		if _, err := f.svc.Confirm(ctx, "a@b.com", wrong, false); !errors.Is(err, auth.ErrCodeInvalid) {
-			t.Fatalf("틀린 코드 %d번째: %v", i+1, err)
+			t.Fatalf("wrong code attempt %d: %v", i+1, err)
 		}
 	}
 	if _, err := f.svc.Confirm(ctx, "a@b.com", good, false); !errors.Is(err, auth.ErrTooManyAttempts) {
-		t.Errorf("시도 초과면 맞는 코드도 거절: %v", err)
+		t.Errorf("after too many attempts even the right code is rejected: %v", err)
 	}
 
 	// expiry
@@ -305,10 +331,10 @@ func TestConfirmRejections(t *testing.T) {
 	f.svc.SendCode(ctx, "a@b.com")
 	f.clk.Advance(auth.CodeTTL)
 	if _, err := f.svc.Confirm(ctx, "a@b.com", f.mail.last, false); !errors.Is(err, auth.ErrCodeExpired) {
-		t.Errorf("만료된 코드: %v", err)
+		t.Errorf("expired code: %v", err)
 	}
 	if len(f.store.sessions) != 0 {
-		t.Error("실패하면 세션이 생기면 안 된다")
+		t.Error("no session must be created on failure")
 	}
 }
 
@@ -332,23 +358,23 @@ func TestAuthenticateRefreshLogout(t *testing.T) {
 		t.Fatalf("Authenticate: %v %v", uid, err)
 	}
 	if _, _, err := f.svc.Authenticate(ctx, res.Tokens.Refresh); !errors.Is(err, errs.ErrUnauthorized) {
-		t.Errorf("refresh 토큰으로 인증할 수 없다: %v", err)
+		t.Errorf("a refresh token must not authenticate: %v", err)
 	}
 	if _, err := f.svc.Refresh(ctx, res.Tokens.Access); !errors.Is(err, errs.ErrUnauthorized) {
-		t.Errorf("access 토큰으로 갱신할 수 없다: %v", err)
+		t.Errorf("an access token must not refresh: %v", err)
 	}
 
 	// even after access expires, refresh yields a new access. The refresh token stays the same
 	f.clk.Advance(auth.AccessTTL + time.Minute)
 	if _, _, err := f.svc.Authenticate(ctx, res.Tokens.Access); !errors.Is(err, errs.ErrUnauthorized) {
-		t.Errorf("만료된 access: %v", err)
+		t.Errorf("expired access: %v", err)
 	}
 	renewed, err := f.svc.Refresh(ctx, res.Tokens.Refresh)
 	if err != nil || renewed.Refresh != res.Tokens.Refresh {
 		t.Fatalf("Refresh: %+v %v", renewed, err)
 	}
 	if _, _, err := f.svc.Authenticate(ctx, renewed.Access); err != nil {
-		t.Errorf("새 access는 유효해야 한다: %v", err)
+		t.Errorf("the new access token must be valid: %v", err)
 	}
 
 	// after logout neither token can be used. Logout also works with an expired token
@@ -357,16 +383,16 @@ func TestAuthenticateRefreshLogout(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := f.svc.Authenticate(ctx, renewed.Access); !errors.Is(err, errs.ErrUnauthorized) {
-		t.Errorf("로그아웃 뒤 access: %v", err)
+		t.Errorf("access after logout: %v", err)
 	}
 	if _, err := f.svc.Refresh(ctx, res.Tokens.Refresh); !errors.Is(err, errs.ErrUnauthorized) {
-		t.Errorf("로그아웃 뒤 refresh: %v", err)
+		t.Errorf("refresh after logout: %v", err)
 	}
 	if err := f.svc.Logout(ctx, ""); err != nil {
-		t.Errorf("토큰이 없어도 로그아웃은 오류가 아니다: %v", err)
+		t.Errorf("logout without a token is not an error: %v", err)
 	}
 	if err := f.svc.Logout(ctx, "garbage"); err != nil {
-		t.Errorf("잘못된 토큰도 오류가 아니다: %v", err)
+		t.Errorf("a bad token is not an error either: %v", err)
 	}
 }
 
@@ -375,7 +401,7 @@ func TestRefreshRejectsExpiredSession(t *testing.T) {
 	res := login(t, f)
 	f.clk.Advance(auth.RefreshTTL + time.Minute)
 	if _, err := f.svc.Refresh(context.Background(), res.Tokens.Refresh); !errors.Is(err, errs.ErrUnauthorized) {
-		t.Errorf("만료된 refresh: %v", err)
+		t.Errorf("expired refresh: %v", err)
 	}
 }
 
@@ -388,7 +414,7 @@ func TestRevokeAllAndPurge(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := f.svc.Authenticate(ctx, res.Tokens.Access); !errors.Is(err, errs.ErrUnauthorized) {
-		t.Errorf("전체 폐기 뒤: %v", err)
+		t.Errorf("after revoking all: %v", err)
 	}
 
 	f.store.codes["old@x.com"] = auth.EmailCode{Email: "old@x.com", ExpiresAt: f.clk.Now().Add(-time.Hour)}
@@ -397,6 +423,6 @@ func TestRevokeAllAndPurge(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(f.store.codes) != 0 || len(f.store.sessions) != 0 {
-		t.Errorf("만료된 것은 지워야 한다: %d %d", len(f.store.codes), len(f.store.sessions))
+		t.Errorf("expired rows must be deleted: %d %d", len(f.store.codes), len(f.store.sessions))
 	}
 }
