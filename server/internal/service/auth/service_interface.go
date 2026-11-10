@@ -9,7 +9,7 @@ import (
 	"github.com/CleanSign/cleansign/server/internal/domain/auth"
 )
 
-// Service는 auth 흐름의 공개 메서드다. handler가 이 인터페이스에 의존하고, 테스트에서는 mock으로 바꾼다.
+// Service is the public surface of the auth flow. The handler depends on this interface, and tests swap in a mock.
 type Service interface {
 	// SendCode sends a 6-digit verification code by email. Resending requires the cooldown to have passed.
 	// The returned value is how long to wait before the next request.
