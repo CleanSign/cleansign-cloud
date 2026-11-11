@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { getContract, requireUser } from "@/lib/api/server";
-import { SEVERITY_CHIP, clauseLabel, formatDate, formatWon, stripPdf } from "@/lib/format";
+import { SEVERITY_CHIP, clauseLabel, formatDate, formatWon, isLowSample, stripPdf } from "@/lib/format";
+import { isRiskScoreEnabled } from "@/lib/features";
 import { ConfirmDelete } from "@/components/ui/confirm-delete";
 import { Tag } from "@/components/ui/tag";
 import { ListRow } from "@/components/ui/list-row";
+import { LowSampleBadge, RiskScore } from "@/components/ui/risk-score";
 import { AnalysisProgress } from "./analysis-progress";
 
 const DOC_ICON = (
@@ -68,6 +70,9 @@ export default async function ContractResultPage({ params }: { params: Promise<{
   const warnings = contract.warnings;
   const range = contract.lossRange;
   const sorted = [...clauses].sort((a, b) => b.lossAmount - a.lossAmount);
+  // SHOW_RISK_SCORE feature flag, read on every request. Off by default: the score card and the
+  // "for reference only" badges stay hidden even when the server returns riskScore/grade values.
+  const showScore = isRiskScoreEnabled();
 
   return (
     <div className="flex min-h-screen flex-col items-center bg-bg">
@@ -85,6 +90,10 @@ export default async function ContractResultPage({ params }: { params: Promise<{
           <span className="break-all text-[13.5px] font-bold text-ink">{stripPdf(contract.fileName)}</span>
           <span className="text-[11.5px] text-ink-3">{formatDate(new Date(contract.createdAt))} 분석</span>
         </div>
+
+        {/* Overall risk score card, placed above the loss card. It renders nothing when the flag is off
+            or when riskScore and grade are both null, so no empty space is left behind. */}
+        <RiskScore enabled={showScore} score={contract.riskScore} grade={contract.grade} />
 
         <div className="pt-4">
           {count === 0 ? (
@@ -143,7 +152,14 @@ export default async function ContractResultPage({ params }: { params: Promise<{
                       <span className="whitespace-nowrap text-xs font-bold text-ink">
                         {c.lossAmount > 0 ? formatWon(c.lossAmount) : "금액 미산출"}
                       </span>
-                      <Tag tone={SEVERITY_CHIP[c.severity].tone}>{SEVERITY_CHIP[c.severity].label}</Tag>
+                      {/* Keep the chips on one line: next to the badge on a ~400px screen, the severity chip
+                          would otherwise wrap one character per line. */}
+                      <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
+                        {/* "For reference only" badge for clause types with too few dispute samples
+                            (SAMPLE_COUNT below MIN_SAMPLES in format.ts). Shown only while the flag is on. */}
+                        {showScore && isLowSample(c.clauseType) && <LowSampleBadge />}
+                        <Tag tone={SEVERITY_CHIP[c.severity].tone}>{SEVERITY_CHIP[c.severity].label}</Tag>
+                      </div>
                     </div>
                   }
                 />
