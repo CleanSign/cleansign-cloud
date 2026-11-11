@@ -1,6 +1,6 @@
 # Stage 1: The Builder 🏗️
 # Install dependencies and build the project
-FROM node:22 AS builder
+FROM node:26 AS builder
 WORKDIR /app
 
 # Copy dependency-related files
@@ -23,7 +23,7 @@ RUN npm run build
 
 # Stage 2: The Runner 🚀
 # Use the lightweight 'slim' image for the final production container
-FROM node:22-slim AS runner
+FROM node:26-slim AS runner
 WORKDIR /app
 
 # Set the environment to production
